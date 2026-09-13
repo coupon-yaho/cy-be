@@ -551,6 +551,92 @@ def print_diff(out):
     return 0
 
 
+def report_paths(rep: Path):
+    """반복 디렉터리의 대조 보고서들을 **오래된 것부터** 낸다.
+
+    ⚠️ **파일 이름을 사전순으로 정렬하면 틀린다.** 같은 초에 두 번 돌면 뒤엣것에
+    `-2` 가 붙는데, `-`(0x2D) 가 `.`(0x2E) 보다 작아서 `…+0000-2.json` 이
+    `…+0000.json` 보다 **앞선다.** `-10` 은 `-2` 보다도 앞선다(문자열 비교).
+    실제로 정렬해 보고 확인했다.
+
+    그래서 이름을 (시각, 접미사 번호)로 **쪼개서** 정렬한다. 시각 부분은 UTC 고정
+    너비라 문자열 비교가 맞고, 접미사는 숫자로 견준다.
+
+    **파일 내용은 안 읽는다.** 예전에는 `generated_at` 을 읽어 정렬했는데, 못 읽은
+    파일을 맨 앞으로 보내는 바람에 **최신 보고서가 잘리면 옛 보고서가 최신 행세를
+    했다** — 요약이 그 옛 결과로 `OK` 를 찍는다. 순서는 이름만으로 정한다.
+    """
+    rows = []
+    for path in rep.glob("reconcile-*.json"):
+        stem = path.stem[len("reconcile-"):]
+        # `<시각>` 또는 `<시각>-<번호>`. 번호가 없으면 첫 번째다.
+        head, _, tail = stem.rpartition("-")
+        if head and tail.isdigit():
+            rows.append((head, int(tail), path))
+        else:
+            rows.append((stem, 1, path))
+    return [r[2] for r in sorted(rows, key=lambda r: (r[0], r[1]))]
+
+
+def report_shape_problem(report):
+    """대조 보고서가 아닌 이유. 보고서면 `None`.
+
+    스키마 이름과 **판정이 실린 두 칸의 타입**을 본다. 요약이 그 둘만 접기 때문에,
+    그 둘이 없으면 "결함 0" 과 구분이 안 된다.
+    """
+    if not isinstance(report, dict):
+        return f"{type(report).__name__} 이다"
+    if report.get("schema") != SCHEMA:
+        return f"schema 가 {report.get('schema')!r} 다"
+    counts = report.get("counts")
+    if not isinstance(counts, dict):
+        return "counts 가 없거나 사전이 아니다"
+    unjudged = report.get("unjudged")
+    if not isinstance(unjudged, list):
+        return "unjudged 가 없거나 목록이 아니다"
+    # **그릇만 보면 모자란다.** 재 보니 셋 다 다른 방식으로 나빴다.
+    #   · 값이 문자열이면 접다가 TypeError 로 요약 전체가 죽는다
+    #   · unjudged 에 숫자가 섞이면 정렬에서 죽는다
+    #   · **키가 모르는 이름이면 아무 일도 안 난다** — 그 결함이 조용히 사라진다.
+    #     터지는 것보다 이쪽이 나쁘다. 그래서 키도 아는 유형인지 본다.
+    for name, n in counts.items():
+        if name not in ALL_TYPES:
+            return f"counts 에 모르는 유형 {name!r} 이 있다"
+        # bool 은 int 의 하위형이다. True 를 1건으로 세지 않는다.
+        if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+            return f"counts[{name!r}] 이 음이 아닌 정수가 아니다"
+    for name in unjudged:
+        if name not in ALL_TYPES:
+            return f"unjudged 에 모르는 유형 {name!r} 이 있다"
+    return None
+
+
+def latest_report(rep: Path):
+    """가장 나중 대조 결과.
+
+    셋을 가른다 — 보고서가 **없으면** `None`("대조 안 함"), 있는데 **못 읽으면**
+    `{"unreadable": …}`, 정상이면 그 내용이다.
+
+    ⚠️ **못 읽었다고 이전 보고서로 물러서지 않는다.** 최신 쓰기가 잘린 상황에서
+    옛 결과를 최신으로 내면, 그 사이에 생긴 유실이 요약에서 사라진다.
+    """
+    paths = report_paths(rep)
+    if not paths:
+        return None
+    path = paths[-1]
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        return {"unreadable": f"{path.name} — {type(e).__name__}"}
+    # **JSON 으로 읽혔다고 대조 보고서인 것은 아니다.** `{}` 도 유효한 JSON 이고,
+    # 그것을 그대로 접으면 유형이 하나도 없으니 **깨끗한 대조로 보인다.** 이름만
+    # 맞는 남의 파일도 마찬가지다. 모양을 확인하고, 아니면 판정 불가로 올린다.
+    problem = report_shape_problem(report)
+    if problem:
+        return {"unreadable": f"{path.name} — {problem}"}
+    return report
+
+
 def unused_path(rep: Path, generated_at: str):
     """아직 없는 이름. 같은 초에 두 번 돌아도 앞 결과를 안 지운다."""
     stamp = generated_at.replace(":", "").replace("-", "")
@@ -562,12 +648,36 @@ def unused_path(rep: Path, generated_at: str):
     return candidate
 
 
+# 심각도 순위. **종료코드 크기순이 아니다** — 결함(1)이 판정 불가(3)·보류(4)보다
+# 나쁘다. 묶음에서 가장 나쁜 것을 고르려면 이 순위로 견줘야 한다.
+SEVERITY = {0: 0, 4: 1, 3: 2, 1: 3}
+CODE_NAME = {0: "정상", 1: "결함", 3: "판정 불가", 4: "보류"}
+
+
+def worst_code(codes):
+    """묶음의 종료코드. 하나라도 결함이면 결함이다."""
+    return max(codes, key=lambda c: SEVERITY.get(c, 3)) if codes else 0
+
+
+def run_one(rep, out_path=None):
+    report = reconcile(rep)
+    # 실행별로 남기고 **덮어쓰지 않는다.** 덮어쓰면 "다시 대조했더니 해소됐다" 를
+    # 보여 줄 상대가 사라진다 — 그 비교가 늦은 등록과 진짜 유실을 가르는 유일한 수단이다.
+    # 이름이 초 단위라 같은 초에 두 번 돌면 앞 결과가 사라지므로, 비어 있는 이름을
+    # 찾을 때까지 뒤에 번호를 붙인다. 마이크로초를 안 쓰는 이유는 사람이 읽어서다.
+    out = Path(out_path) if out_path else unused_path(rep, report["generated_at"])
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    code = print_report(report)
+    print(f"  → {out}")
+    return code
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("paths", nargs="+", metavar="경로")
     p.add_argument("--diff", action="store_true", help="대조 결과 두 개를 비교한다")
-    p.add_argument("--out", help="결과 JSON 을 쓸 경로. 기본은 반복 디렉터리 아래 타임스탬프")
+    p.add_argument("--out", help="결과 JSON 을 쓸 경로. 반복 하나일 때만 쓴다")
     args = p.parse_args()
 
     if args.diff:
@@ -576,20 +686,20 @@ def main():
         a, b = (json.loads(Path(x).read_text()) for x in args.paths)
         return print_diff(diff(a, b))
 
-    if len(args.paths) != 1:
-        p.error("반복 디렉터리 하나를 받는다")
-    rep = Path(args.paths[0])
-    report = reconcile(rep)
-    # 실행별로 남기고 **덮어쓰지 않는다.** 덮어쓰면 "다시 대조했더니 해소됐다" 를
-    # 보여 줄 상대가 사라진다 — 그 비교가 늦은 등록과 진짜 유실을 가르는 유일한 수단이다.
-    # 이름이 초 단위라 **같은 초에 두 번 돌면 앞 결과가 사라진다** — 덮어쓰지 않겠다는
-    # 약속이 그 자리에서 깨진다. 비어 있는 이름을 찾을 때까지 뒤에 번호를 붙인다.
-    # 마이크로초를 안 쓰는 이유는 이 이름을 사람이 읽고 고르기 때문이다.
-    out = Path(args.out) if args.out else unused_path(rep, report["generated_at"])
-    out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    code = print_report(report)
-    print(f"  → {out}")
-    return code
+    if args.out and len(args.paths) != 1:
+        p.error("--out 은 반복 하나일 때만 쓴다 — 여럿이면 서로 덮어쓴다")
+    if len(args.paths) == 1:
+        return run_one(Path(args.paths[0]), args.out)
+
+    codes = []
+    for path in args.paths:
+        print(f"\n\u2500\u2500 {path}")
+        # **하나가 결함이어도 멈추지 않는다.** 첫 반복에서 멈추면 나머지를 못 본다.
+        codes.append(run_one(Path(path)))
+    order = sorted(set(codes), key=lambda c: SEVERITY.get(c, 3))
+    print(f"\n묶음 {len(codes)}개 — "
+          + " · ".join(f"{CODE_NAME.get(c, c)} {codes.count(c)}" for c in order))
+    return worst_code(codes)
 
 
 if __name__ == "__main__":

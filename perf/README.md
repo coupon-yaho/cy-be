@@ -162,11 +162,15 @@ perf/seed/seed.sh
 ### ④ 회차 — 반복
 
 ```bash
-perf/run/run-repeat.sh --engine V2 --profile spike
-perf/run/run-repeat.sh --engine V1 --profile spike
+PERF_RECORD_REQUESTS=true perf/run/run-repeat.sh --engine V2 --profile spike
+PERF_RECORD_REQUESTS=true perf/run/run-repeat.sh --engine V1 --profile spike
 ```
 
-`--engine` 만 다르다. **v1 회차와 v2 회차를 같은 스크립트로 잰다** — 회차의
+`--engine` 만 다르다.
+
+> **`PERF_RECORD_REQUESTS` 를 켠다.** 안 켜면 독립 기록이 안 남고, 기록이 없으면
+> §4.1 의 대조를 **아예 못 한다.** 요약표는 그 경우 「불변식」에 `대조 안 함` 을
+> 적는다 — 침묵하면 그것이 `OK` 로 읽히기 때문이다. 비용은 §4.1 에서 쟀다. **v1 회차와 v2 회차를 같은 스크립트로 잰다** — 회차의
 `issuance_engine_version` 만 바뀐다.
 
 프로필 둘:
@@ -224,6 +228,11 @@ perf/results/<run-id>/
     reconcile-*.json  대조 결과. 실행마다 새 파일이고 덮어쓰지 않는다
   summary.txt
 ```
+
+`summary.txt` 의 「불변식」은 **대조 결과까지 본다.** `OK` 는 초과발급·1인2매·전송
+오류가 없고 **대조도 깨끗하다**는 뜻이다. 대조를 안 돌렸으면 `대조 안 함` 으로
+적는다 — 예전에는 여기서 대조를 안 봐서, 옆 디렉터리의 보고서가 유실을 잡아 놓아도
+요약이 `OK` 를 찍었다.
 
 `round.json` 의 `scrape_health` 는 **측정 구간 창에서** 평가한다. 창을 못 얻으면 추정으로
 채우지 않고 `source: "unavailable"` 로 두고 값을 전부 `null` 로 남긴다.
@@ -284,8 +293,15 @@ perf/results/<run-id>/
 
 ```bash
 PERF_RECORD_REQUESTS=true perf/run/run-repeat.sh --engine V2 --profile spike
-perf/run/reconcile.sh perf/results/<run-id>/rate-6667/rep-1
+perf/run/reconcile.sh perf/results/<run-id>                     # 묶음 전체
+perf/run/reconcile.sh perf/results/<run-id>/rate-6667/rep-1     # 반복 하나
 ```
+
+묶음을 주면 그 아래 `rate-*/rep-*` 를 전부 돈다. **하나가 결함이어도 나머지를
+판정하고**(첫 반복에서 멈추면 나머지를 못 본다), 종료코드는 가장 나쁜 것을 낸다 —
+심각도는 결함 > 판정 불가 > 보류 > 정상이라 **코드 크기순(0<1<3<4)과 다르다.**
+보고서는 반복마다 그 반복 디렉터리에 남는다. 합치지 않는다 — 합치면 어느 반복의
+유실인지가 사라진다.
 
 **요청을 보내기 전에** 접수 키·대상을 적는 것이 핵심이다. 성공 응답만 모으면
 **양쪽에서 동시에 빠진 건**이 통째로 안 보인다 — 성공 목록에도 없고 DB 에도 없으니

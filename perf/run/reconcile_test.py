@@ -20,10 +20,21 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CLI = HERE / "reconcile.py"
 
+# 순위 계산처럼 프로세스를 띄울 필요가 없는 것은 직접 부른다.
+sys.path.insert(0, str(HERE))
+import reconcile as reconcile_mod  # noqa: E402
+
 ROUND = 7001          # 회차
 MEMBER = 4200         # 회원 — 회차와 자릿수까지 다르게 둔다
 ISSUANCE = 990001     # 발급 번호
 KEY = "11111111-2222-4333-8444-555555555555"
+
+
+def as_report(when, mark):
+    """진짜 대조 보고서의 모양. **픽스처가 이 모양이어야 한다** — 아니면 판정 불가로
+    걸러지는 것이 정상인 파일을 "보고서" 로 놓고 시험하게 된다."""
+    return {"schema": reconcile_mod.SCHEMA, "generated_at": when,
+            "counts": {}, "unjudged": [], "mark": mark}
 
 
 def tsv(rows):
@@ -593,6 +604,227 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.types(report), {"MATCHED": 1})
         self.assertEqual(report["totals"]["other_round_records"], 1)
         self.assertEqual(code, 0)
+
+    # ── 묶음 (CY-964) ────────────────────────────────────────────────
+
+    def _rep(self, root, name, records, issuances=(), idem=(), histories=None):
+        d = Path(root) / name
+        d.mkdir(parents=True)
+        Fixture(d, records, issuances, idem, histories=histories)
+        return d
+
+    def batch(self, *dirs):
+        proc = subprocess.run([sys.executable, str(CLI), *[str(d) for d in dirs]],
+                              capture_output=True, text=True)
+        return proc.returncode, proc
+
+    def test_반복을_여럿_주면_전부_돈다(self):
+        ok = [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"]
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self._rep(tmp, "rep-1", ok, [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            b = self._rep(tmp, "rep-2", ok, [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            code, proc = self.batch(a, b)
+            written = [len(list(d.glob("reconcile-*.json"))) for d in (a, b)]
+        self.assertEqual(written, [1, 1])          # 반복마다 자기 보고서가 남는다
+        self.assertIn("묶음 2개 — 정상 2", proc.stdout)
+        self.assertEqual(code, 0)
+
+    def test_하나가_결함이어도_나머지를_판정한다(self):
+        # 첫 반복에서 멈추면 나머지를 못 본다. 결함 반복을 **앞에** 둔다.
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = self._rep(tmp, "rep-1",
+                            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                             f"CY960\tOK\t{KEY}\t{ISSUANCE}"])           # 발급 없음 → LOST
+            good = self._rep(tmp, "rep-2",
+                             [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                              f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+                             [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            code, proc = self.batch(bad, good)
+            after = len(list(good.glob("reconcile-*.json")))
+        self.assertEqual(after, 1, "뒤 반복이 판정되지 않았다")
+        self.assertIn("묶음 2개", proc.stdout)
+        self.assertEqual(code, 1)
+
+    def test_묶음의_종료코드는_가장_나쁜_것이다(self):
+        # **크기순이 아니다.** 결함(1)이 판정 불가(3)·보류(4)보다 나쁘다.
+        self.assertEqual(reconcile_mod.worst_code([0, 4, 3, 1]), 1)
+        self.assertEqual(reconcile_mod.worst_code([0, 4, 3]), 3)
+        self.assertEqual(reconcile_mod.worst_code([0, 4]), 4)
+        self.assertEqual(reconcile_mod.worst_code([0, 0]), 0)
+        self.assertEqual(reconcile_mod.worst_code([]), 0)
+
+    def test_보류와_결함이_섞이면_결함이_이긴다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pending = self._rep(tmp, "rep-1",
+                                [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])  # UNRESOLVED
+            defect = self._rep(tmp, "rep-2",
+                               [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                                f"CY960\tOK\t{KEY}\t{ISSUANCE}"])            # LOST
+            code, proc = self.batch(pending, defect)
+        self.assertIn("결함 1", proc.stdout)
+        self.assertIn("보류 1", proc.stdout)
+        self.assertEqual(code, 1)
+
+    def test_묶음에는_out_을_못_쓴다(self):
+        # 반복마다 자기 보고서가 남아야 한다. 한 경로로 몰면 서로 덮어쓴다.
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self._rep(tmp, "rep-1", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            b = self._rep(tmp, "rep-2", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            proc = subprocess.run(
+                [sys.executable, str(CLI), str(a), str(b), "--out", f"{tmp}/x.json"],
+                capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 2)          # argparse 사용법 오류
+        self.assertIn("--out 은 반복 하나일 때만", proc.stderr)
+
+    # ── 최신 보고서 고르기 (CY-965) ──────────────────────────────────
+
+    def test_같은_초의_보고서는_접미사_번호로_가른다(self):
+        # **사전순으로 고르면 틀린다** — '-'(0x2D) < '.'(0x2E) 라 `-2` 가 접미사 없는
+        # 것보다 앞서고, `-10` 은 `-2` 보다도 앞선다(문자열 비교).
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            same = "2026-09-13T03:45:12+00:00"
+            for name, mark in (("reconcile-20260913T034512+0000.json", "첫째"),
+                               ("reconcile-20260913T034512+0000-2.json", "둘째"),
+                               ("reconcile-20260913T034512+0000-10.json", "열째")):
+                (d / name).write_text(json.dumps(as_report(same, mark)))
+            self.assertEqual(reconcile_mod.latest_report(d)["mark"], "열째")
+            self.assertEqual(
+                [p.name for p in reconcile_mod.report_paths(d)],
+                ["reconcile-20260913T034512+0000.json",
+                 "reconcile-20260913T034512+0000-2.json",
+                 "reconcile-20260913T034512+0000-10.json"])
+
+    def test_시각이_다르면_시각으로_고른다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "reconcile-20260913T034512+0000-9.json").write_text(
+                json.dumps(as_report("2026-09-13T03:45:12+00:00", "이른")))
+            (d / "reconcile-20260913T034513+0000.json").write_text(
+                json.dumps(as_report("2026-09-13T03:45:13+00:00", "늦은")))
+            self.assertEqual(reconcile_mod.latest_report(d)["mark"], "늦은")
+
+    def test_보고서가_없으면_None_이다(self):
+        # **"대조 안 함" 과 "대조했고 깨끗함" 은 다르다.** 빈 결과로 뭉개면 안 한 것이
+        # 깨끗한 것으로 보인다.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(reconcile_mod.latest_report(Path(tmp)))
+
+    def test_옛_보고서가_깨져도_최신을_고른다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "reconcile-20260913T034512+0000.json").write_text("{ 깨짐")
+            (d / "reconcile-20260913T034513+0000.json").write_text(
+                json.dumps(as_report("2026-09-13T03:45:13+00:00", "멀쩡")))
+            self.assertEqual(reconcile_mod.latest_report(d)["mark"], "멀쩡")
+
+    def test_최신_보고서가_깨지면_옛것으로_물러서지_않는다(self):
+        # 최신 쓰기가 잘린 상황이다. **옛 결과를 최신으로 내면 그 사이에 생긴 유실이
+        # 사라지고, 요약이 옛 보고서로 OK 를 찍는다.** 못 읽었다고 말해야 한다.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "reconcile-20260913T034512+0000.json").write_text(
+                json.dumps(as_report("2026-09-13T03:45:12+00:00", "이른")))
+            (d / "reconcile-20260913T034513+0000.json").write_text("{ 잘림")
+            got = reconcile_mod.latest_report(d)
+        self.assertIn("unreadable", got)
+        self.assertIn("034513", got["unreadable"])
+
+    def test_보고서가_아닌_JSON_을_깨끗한_대조로_안_본다(self):
+        # `{}` 도 유효한 JSON 이다. 그대로 접으면 유형이 하나도 없으니 **깨끗한
+        # 대조로 보인다** — 이름만 맞는 남의 파일도 마찬가지다.
+        cases = [
+            ("빈 객체", {}),
+            ("스키마 없음", {"counts": {}, "unjudged": []}),
+            ("스키마 다름", {"schema": "남의것/1", "counts": {}, "unjudged": []}),
+            ("counts 없음", {"schema": reconcile_mod.SCHEMA, "unjudged": []}),
+            ("counts 가 목록", {"schema": reconcile_mod.SCHEMA, "counts": [], "unjudged": []}),
+            ("unjudged 가 사전", {"schema": reconcile_mod.SCHEMA, "counts": {}, "unjudged": {}}),
+            ("객체가 아님", [1, 2, 3]),
+            # 그릇만 보면 모자란다. 셋 다 다른 방식으로 나쁘다 — 재서 확인했다.
+            ("counts 값이 문자열",                       # 접다가 TypeError 로 요약이 죽는다
+             {"schema": reconcile_mod.SCHEMA, "counts": {"LOST": "1"}, "unjudged": []}),
+            ("counts 값이 음수",
+             {"schema": reconcile_mod.SCHEMA, "counts": {"LOST": -1}, "unjudged": []}),
+            ("counts 값이 bool",                          # True 를 1건으로 세면 안 된다
+             {"schema": reconcile_mod.SCHEMA, "counts": {"LOST": True}, "unjudged": []}),
+            ("counts 키가 숫자",                          # 안 터지고 **조용히 사라진다**
+             {"schema": reconcile_mod.SCHEMA, "counts": {7: 1}, "unjudged": []}),
+            ("counts 키가 모르는 이름",
+             {"schema": reconcile_mod.SCHEMA, "counts": {"LOSTT": 1}, "unjudged": []}),
+            ("unjudged 에 숫자",                          # 정렬에서 죽는다
+             {"schema": reconcile_mod.SCHEMA, "counts": {}, "unjudged": ["LOST", 3]}),
+            ("unjudged 에 모르는 이름",
+             {"schema": reconcile_mod.SCHEMA, "counts": {}, "unjudged": ["LOSTT"]}),
+        ]
+        for label, payload in cases:
+            with self.subTest(label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    d = Path(tmp)
+                    (d / "reconcile-20260913T034512+0000.json").write_text(json.dumps(payload))
+                    got = reconcile_mod.latest_report(d)
+                self.assertIn("unreadable", got, label)
+
+    def test_아는_유형과_정수면_통과한다(self):
+        ok = {"schema": reconcile_mod.SCHEMA,
+              "counts": {"LOST": 3, "MATCHED": 0}, "unjudged": ["ORPHAN"]}
+        self.assertIsNone(reconcile_mod.report_shape_problem(ok))
+
+    def test_모양이_맞으면_그대로_낸다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "reconcile-20260913T034512+0000.json").write_text(
+                json.dumps(as_report("2026-09-13T03:45:12+00:00", "정상")))
+            got = reconcile_mod.latest_report(d)
+        self.assertNotIn("unreadable", got)
+        self.assertEqual(got["mark"], "정상")
+
+    def test_진짜_대조가_낸_보고서는_모양_검사를_통과한다(self):
+        # 손으로 만든 픽스처만 통과하면 검사가 실물과 어긋난 것이다.
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            subprocess.run([sys.executable, str(CLI), str(f.dir)],
+                           capture_output=True, text=True)
+            got = reconcile_mod.latest_report(f.dir)
+        self.assertIsNotNone(got)
+        self.assertNotIn("unreadable", got)
+        self.assertIsNone(reconcile_mod.report_shape_problem(got))
+
+    def test_순서는_파일_내용을_안_읽고_정한다(self):
+        # 내용으로 정렬하면 못 읽은 파일의 자리를 정할 수 없다. 이름만으로 정한다.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            for n in ("reconcile-20260913T034512+0000.json",
+                      "reconcile-20260913T034512+0000-2.json",
+                      "reconcile-20260913T034513+0000.json"):
+                (d / n).write_text("{ 전부 깨짐")
+            self.assertEqual(
+                [p.name for p in reconcile_mod.report_paths(d)],
+                ["reconcile-20260913T034512+0000.json",
+                 "reconcile-20260913T034512+0000-2.json",
+                 "reconcile-20260913T034513+0000.json"])
+
+    def test_대조가_실제로_남긴_파일도_골라낸다(self):
+        # 위 시험들은 이름을 손으로 만들었다. **진짜 대조가 낸 파일**로도 도는지 본다 —
+        # 이름 규칙이 바뀌면 손으로 만든 픽스처만 통과하는 상태가 된다.
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            for _ in range(2):
+                subprocess.run([sys.executable, str(CLI), str(f.dir)],
+                               capture_output=True, text=True)
+            paths = reconcile_mod.report_paths(f.dir)
+            latest = reconcile_mod.latest_report(f.dir)
+            # 고른 것이 정말 마지막 파일의 내용인지 본다.
+            tail = json.loads(paths[-1].read_text())
+            names = [x.name for x in paths]
+        self.assertEqual(len(paths), 2, names)
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest, tail)
+        # ⚠️ **접미사가 붙는다고 단언하지 않는다.** 두 실행이 초 경계를 넘으면
+        #    접미사 없이 시각만 달라져, 그 단언은 간헐적으로 빨개진다. 접미사 순서
+        #    자체는 위의 손 픽스처 시험이 결정적으로 태운다. 여기서 볼 것은
+        #    **진짜 이름도 파싱된다**는 것뿐이다.
+        self.assertTrue(all(n.startswith("reconcile-") for n in names), names)
 
     # ── 전후 비교 ────────────────────────────────────────────────────
 

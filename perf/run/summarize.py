@@ -16,11 +16,18 @@
     돌아다니는 "1120/s" 는 어느 결과에도 없는 설정값이다.
   · 반복이 하나뿐이면 중앙값을 내지 않고 그렇게 표시한다. 표본 하나로 두 변형을
     비교하면 잡음과 차이를 구분할 수 없다.
+  · 「불변식」의 OK 는 **대조까지 통과했다는 뜻이어야 한다.** 예전에는 DB 안쪽
+    검사와 전송 오류만 보고 OK 를 찍었고, 바로 옆 reconcile-*.json 이 유실을
+    잡아 놓아도 요약은 OK 였다. 대조를 안 돌린 반복은 「대조 안 함」으로 적는다 —
+    침묵하면 그것도 OK 로 읽힌다.
 """
 import json
 import statistics
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from reconcile import DEFECT, PENDING, latest_report  # noqa: E402
 
 TREND = ["med", "p(95)", "p(99)"]
 
@@ -79,6 +86,9 @@ def load_rep(d: Path):
         "issuances": rnd["db_after"]["issuances"],
         "ping_avg_ms": meta["ping_b_to_a"]["avg_ms"],
         "ping_stddev_ms": meta["ping_b_to_a"]["stddev_ms"],
+        # 대조는 **실행하지 않는다.** 요약은 DB 를 안 만지는 물건이고, 그 선을 넘으면
+        # summarize.py 가 회차 환경을 요구하게 된다. 남아 있는 보고서만 읽는다.
+        "reconcile": latest_report(d),
         "meta": meta,
     }
 
@@ -106,12 +116,70 @@ def summarize_group(reps):
     return out
 
 
+def fold_reconcile(reps):
+    """반복들의 대조 결과를 하나로 접는다.
+
+    **중앙값을 내지 않는다.** 유실은 분포가 아니라 집합이라, 5회 중 1회에서 3건이
+    빠졌으면 그것은 "중앙값 0" 이 아니라 "3건이 빠졌다" 다.
+
+    적용 범위도 함께 낸다. 5회 중 3회만 대조했으면 나머지 2회는 **안 본 것**이고,
+    그 사실이 안 보이면 3회의 결과가 5회의 결과로 읽힌다.
+    """
+    found = [r["reconcile"] for r in reps if r["reconcile"]]
+    # 못 읽은 보고서는 **판정에 안 쓴다.** 그 반복은 "대조했는데 결과를 모른다" 이고,
+    # 옛 보고서로 물러서면 그 사이의 유실이 사라진다.
+    unreadable = [r for r in found if "unreadable" in r]
+    done = [r for r in found if "unreadable" not in r]
+    counts = {}
+    unjudged = set()
+    for rep in done:
+        for name, n in rep.get("counts", {}).items():
+            if n:
+                counts[name] = counts.get(name, 0) + n
+        unjudged |= set(rep.get("unjudged", []))
+    return {"reps": len(reps), "done": len(done), "unreadable": len(unreadable),
+            "counts": counts, "unjudged": sorted(unjudged)}
+
+
+def reconcile_flags(rc):
+    """「불변식」 줄에 실을 문구. 빈 목록이면 대조까지 깨끗하다는 뜻이다."""
+    if rc is None or rc["reps"] == 0:
+        return []
+    flags = []
+    if rc.get("unreadable"):
+        # 대조는 돌았는데 결과를 못 읽었다. "안 함" 과도 "깨끗함" 과도 다르다.
+        flags.append(f"대조 보고서 {rc['unreadable']}건을 못 읽음 — 그 반복은 판정 불가다")
+    if rc["done"] == 0:
+        if not flags:
+            # **침묵하면 OK 로 읽힌다.** 안 한 것과 했고 깨끗한 것은 다르다.
+            flags.append("대조 안 함 — PERF_RECORD_REQUESTS 를 켜고"
+                         " perf/run/reconcile.sh 를 부른다")
+        return flags
+    if rc["done"] < rc["reps"]:
+        flags.append(f"대조 {rc['reps']}회 중 {rc['done']}회만 판정됨")
+    defects = {k: v for k, v in rc["counts"].items() if k in DEFECT}
+    pending = {k: v for k, v in rc["counts"].items() if k in PENDING}
+    if defects:
+        flags.append("대조 결함 " + " · ".join(f"{k} {v}" for k, v in sorted(defects.items())))
+    if rc["unjudged"]:
+        flags.append(f"대조 판정 불가 {len(rc['unjudged'])}유형")
+    if pending:
+        flags.append("대조 보류 " + " · ".join(f"{k} {v}" for k, v in sorted(pending.items()))
+                     + " — 복구 뒤 다시 대조한다")
+    return flags
+
+
 def load_run(run_dir: Path):
     groups = {}
     # 제외된 반복 수도 세어 둔다 — "원래 2회였다" 와 "5회 중 3회가 깨졌다" 는 다르다.
     for rate_dir in sorted(run_dir.glob("rate-*"), key=lambda p: int(p.name.split("-")[1])):
         found = sorted(rate_dir.glob("rep-*"))
         reps = [r for r in (load_rep(d) for d in found) if r]
+        # **대조는 성능과 따로 접는다.** load_rep 은 k6 가 비정상 종료한 반복을 빼는데
+        # (그 반복의 분위수는 못 믿는다), reconcile.sh 는 그 반복도 돌아 보고서를
+        # 남긴다. 성능 표본에서 뺐다고 그 반복의 유실까지 빼면, 죽은 회차의 결함이
+        # 요약에서 통째로 사라진다 — 정작 그때가 유실이 가장 잘 나는 자리다.
+        all_reconcile = [{"reconcile": latest_report(d)} for d in found]
         if reps:
             g = summarize_group(reps)
             g["excluded"] = len(found) - len(reps)
@@ -121,12 +189,15 @@ def load_run(run_dir: Path):
             g = {"n": 0, "excluded": len(found), "engine": None,
                  "configured_rps": None, "configured_requests": None,
                  "over_issued_any": False, "dup_members_max": 0,
-                 "ping_avg_ms": None, "ping_stddev_max": None}
+                 "ping_avg_ms": None, "ping_stddev_max": None,
+                 "reconcile": None}
             for k in TREND_KEYS:
                 g[k] = None
                 g[k + "_all"] = []
         else:
             continue
+        # 유효 반복이 0개인 그룹에도 대조는 있을 수 있다. 오히려 그쪽이 더 중요하다.
+        g["reconcile"] = fold_reconcile(all_reconcile)
         groups[rate_dir.name] = g
     return groups
 
@@ -194,6 +265,9 @@ def print_run(run_dir: Path, groups):
             flags.append(f"기타 전송 오류 {int(g['transport_errors'])}건")
         if g["n"] == 0:
             flags.append(f"유효 반복 없음 — {g['excluded']}개 시도가 전부 실패했다")
+        # **OK 는 대조까지 통과했다는 뜻이어야 한다.** 예전에는 여기서 대조를 안 봐서,
+        # 옆 디렉터리의 보고서가 유실을 잡아 놓아도 요약이 OK 를 찍었다.
+        flags += reconcile_flags(g.get("reconcile"))
         print(f"     {name}: {'· '.join(flags) if flags else 'OK'}")
         print(f"        반복별 성공med = {[fmt(v,2) for v in g['success_med_all']]}")
         print(f"        ping avg {fmt(g['ping_avg_ms'],2)}ms · stddev 최대 {fmt(g['ping_stddev_max'],2)}ms")
