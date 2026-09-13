@@ -207,6 +207,29 @@ jobs:
             --entrypoint amtool prom/alertmanager:v0.28.1 \
             check-config /etc/alertmanager/alertmanager.yml
 
+      # 부하 도구의 **응답 판정**을 태운다. 서버도 환경변수도 없이 가짜 응답만 넣는다.
+      #
+      # 이게 없으면 `409` 하나를 잘못 접는 것을 아무도 못 잡는다. 실제로 그랬다 —
+      # `409 COUPON-320`("요청을 처리 중입니다")을 명시적 거절로 세는 바람에 대조가
+      # **결과 불명을 정상으로** 판정했다(종료코드 0, MATCHED_REJECTED).
+      #
+      # ⚠️ **예외를 던지는 시험은 게이트가 안 된다.** k6 는 기본 함수가 throw 해도
+      #    종료코드 0 으로 끝난다(실측: pass=0, throw=0). 임계값이 깨져야 99 다.
+      #    그래서 시험이 실패를 카운터로 세고 `count==0` 임계값을 건다 — 그 구조를
+      #    바꾸면 항상 통과하는 가짜 게이트가 된다.
+      - name: 부하 도구 판정 시험
+        run: |
+          set -euo pipefail
+          ALL=()
+          while IFS= read -r -d '' f; do ALL+=("$f"); done \
+            < <(git ls-files -z 'perf/k6/*_test.js')
+          [ "${#ALL[@]}" -gt 0 ] || { echo "::error::k6 판정 시험을 못 찾았다"; exit 1; }
+          for f in "${ALL[@]}"; do
+            echo "→ $f"
+            docker run --rm --network none -v "$PWD/perf/k6:/k6:ro" -w /k6 \
+              grafana/k6:latest run "$(basename "$f")"
+          done
+
       # 셸 스크립트도 검사한다. 위쪽 «파이썬 구문 검사» 와 같은 이유이고, 여기가 더 세다 —
       # scripts/ 는 **예약 작업이 무인으로 돌리는 코드**라 사람이 그 순간을 못 본다.
       # dump-verify-report.sh 는 git commit·push 를 부르므로 오타 하나가 조용히 사고가 된다.

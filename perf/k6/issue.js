@@ -9,6 +9,7 @@
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
+import { classify, OK, REJECTED, DEFERRED } from './outcome.js';
 
 const BASE_URL = __ENV.BASE_URL;
 const TIMEOUT = __ENV.HTTP_TIMEOUT || '60s';
@@ -58,6 +59,9 @@ if (!MEMBER_GRADE || !WARMUP_MEMBER_GRADE) {
 const successes = new Counter('issue_successes');
 const rejections = new Counter('issue_rejections');
 const errors = new Counter('issue_errors');
+// 서버가 **아직 안 정했다**고 말한 4xx. `Retry-After` 가 붙은 응답이다.
+// 거절과 같은 칸에 넣으면 안 된다 — 거절은 판정이고 이쪽은 판정이 없는 상태다.
+const deferred = new Counter('issue_deferred');
 // ⚠️ 내장 http_reqs 는 워밍업 시나리오까지 합산한다. 그 rate 는 "워밍업 + 대기 + 측정"
 //    전체 실행 시간으로 나눈 값이라 측정 구간의 달성 도착률이 아니다. 실측으로
 //    설정 800/s x 5s 회차에서 http_reqs.rate 가 185/s 로 나왔다 —
@@ -235,6 +239,15 @@ export function measure() {
 
   const res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
 
+  // 판정은 outcome.js 가 한다 — 서버 없이 시험할 수 있어야 해서 갈라 뒀다.
+  const { kind, reason } = classify(res);
+  record(kind === DEFERRED ? 'UNKNOWN' : kind, [key, reason]);
+
+  if (kind === OK) {
+    successes.add(1);
+    successDuration.add(res.timings.duration);
+    return;
+  }
   // ⚠️ 연결이 아예 안 된 실패는 status 0 이고 duration 이 0 이다. 이것을 응답 지연으로
   //    세면 분포가 통째로 거짓이 된다. 톰캣 수용 상한(max-connections + accept-count)을
   //    넘기면 실제로 이쪽으로 찍힌다.
@@ -248,56 +261,22 @@ export function measure() {
     } else {
       otherTransportErrors.add(1, tag);        // TLS·HTTP2·그 밖
     }
-    // **연결 실패도 "안 됐다" 가 아니다.** 타임아웃은 서버가 이미 커밋했을 수 있고,
-    // 연결 거부는 대개 아니다 — 그러나 여기서 가르지 않는다. 가르는 것은 대조가
-    // DB 를 보고 할 일이고, 여기서 단정하면 그 판단을 미리 굳힌다.
-    record('UNKNOWN', [key, String(ec)]);
     return;
   }
-
-  if (res.status === 201) {
-    successes.add(1);
-    successDuration.add(res.timings.duration);
-    record('OK', [key, issuanceIdOf(res)]);
-    return;
-  }
-
-  const code = errorCodeOf(res);
   if (res.status >= 500) {
-    errors.add(1, { code: code });
-    // 5xx 는 **명시적 거절이 아니다.** 서버가 커밋하고 응답에서 터졌을 수 있다.
-    record('UNKNOWN', [key, `HTTP-${res.status}`]);
+    errors.add(1, { code: reason });
     return;
   }
-  rejections.add(1, { code: code });
-  // 4xx 는 서버가 **안 받았다고 말한 것**이다. 그것만 명시적 거절로 둔다.
-  record('REJECTED', [key, code]);
-  if (code === 'COUPON-306') {
+  if (kind === DEFERRED) {
+    // 서버가 **아직 안 정했다.** 거절과 같은 칸에 넣으면 판정이 아닌 것이 판정이 된다.
+    deferred.add(1, { code: reason });
+    return;
+  }
+  rejections.add(1, { code: reason });
+  if (reason === 'COUPON-306') {
     soldOutDuration.add(res.timings.duration);
   } else {
     otherRejectDuration.add(res.timings.duration);
-  }
-}
-
-// 201 응답의 예약번호. 없으면 빈 문자열이다 — **없다는 사실도 기록한다.**
-// 201 인데 id 가 없으면 응답 계약이 깨진 것이고, 그것을 조용히 빼면 대조가
-// "그 건은 애초에 없었다" 로 읽는다.
-function issuanceIdOf(res) {
-  try {
-    const body = res.json();
-    const id = body && body.data && body.data.issuanceId;
-    return id === undefined || id === null ? '' : String(id);
-  } catch (e) {
-    return '';
-  }
-}
-
-function errorCodeOf(res) {
-  try {
-    const body = res.json();
-    return (body && body.error && body.error.code) || `HTTP-${res.status}`;
-  } catch (e) {
-    return `HTTP-${res.status}`;
   }
 }
 
