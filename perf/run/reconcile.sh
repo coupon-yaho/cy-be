@@ -7,7 +7,7 @@
 # 한 번, 그리고 복구를 기다린 뒤 한 번 더 부르는 것이 쓰임새 전부다. 두 번째 대조가
 # 첫 번째의 "미해결" 을 지워 주면 그것은 늦게 들어온 등록이고, 안 지워지면 유실이다.
 #
-# **DB 에 쓰지 않는다.** 읽기 질의 둘뿐이고, 결과를 파일로 떨군 뒤 판정은
+# **DB 에 쓰지 않는다.** 읽기 질의 셋뿐이고, 결과를 파일로 떨군 뒤 판정은
 # reconcile.py 가 한다. 판정을 파이썬에 두는 이유는 픽스처 파일만으로 시험할 수
 # 있어서다 — 양쪽 동시 누락도, 재기동도, 늦은 취소 경합도 DB 없이 태울 수 있다.
 #
@@ -47,6 +47,22 @@ log "대상 회차 $ROUND 의 발급을 읽는다"
 dump db-issuances.tsv "
   SELECT id, coupon_id, member_id, status
   FROM issuances WHERE coupon_id = $ROUND ORDER BY id;"
+
+# 발급마다 접수 키가 하나 붙어 있다. **이것이 조인 축이다.**
+#
+# IssuanceHistory.issue(issuanceId, requestId, ...) 에 멱등 키가 그대로 들어간다 —
+# V2CouponIssueService · CouponIssueService 둘 다 그렇다. 스키마 주석도 "F4 —
+# idempotency_records.idem_key 와 연결" 이라고 적어 뒀다.
+#
+# ⚠️ request_id 로 긁지 않는다. 거기엔 인덱스가 없다(있는 것은 created_at 과
+#    issuance_id 로 시작하는 둘뿐). 회차의 발급 id 로 조인해야 그 인덱스를 탄다.
+log "발급마다 붙은 접수 키를 읽는다 (ISSUE 이력만 — 상태 전이까지 끌면 발급 하나에 여러 줄이다)"
+dump db-histories.tsv "
+  SELECT h.issuance_id, IFNULL(h.request_id, '')
+  FROM issuance_histories h
+  JOIN issuances i ON i.id = h.issuance_id
+  WHERE i.coupon_id = $ROUND AND h.event_type = 'ISSUE'
+  ORDER BY h.issuance_id;"
 
 # 멱등 레코드는 두 갈래로 모은다.
 #

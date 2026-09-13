@@ -54,12 +54,16 @@ CLEAN = (
     "RESOLVED_ISSUED",            # 결과 불명이었는데 DB 가 "접수됐다" 로 갈라 줬다
 )
 DEFECT = (
-    "LOST",                  # 성공 응답을 받았는데 발급이 없다
-    "MISMATCH",              # 받은 예약번호·대상이 DB 와 다르다
-    "FALSE_REJECT",          # 안 받았다고 해 놓고 발급이 있다
-    "ALREADY_ISSUED_PHANTOM",# 이미 있다고 거절해 놓고 발급이 없다
-    "ORPHAN",                # 발급은 있는데 보낸 기록이 없다
-    "DUPLICATE",             # 한 대상에 발급이 둘 이상
+    "LOST",                  # 성공 응답을 받았는데 발급이 아무 데도 없다
+    "KEY_MISMATCH",          # 그 대상에 발급은 있는데 **내 접수 키로 만들어지지 않았다**
+    "TARGET_MISMATCH",       # 내 접수 키의 발급인데 **대상(회차·회원)이 다르다**
+    "MISMATCH",              # 받은 예약번호가 DB 와 다르거나 못 읽었다
+    "FALSE_REJECT",          # 안 받았다고 해 놓고 내 키의 발급이 있다
+    "ALREADY_ISSUED_PHANTOM",# 이미 있다고 거절해 놓고 그 대상에 발급이 없다
+    "ORPHAN",                # 발급의 접수 키가 보낸 기록에 없다
+    "DUPLICATE",             # **한 접수 키가 발급 둘을 만들었다** — 멱등이 깨졌다
+    "DUPLICATE_TARGET",      # 한 대상에 발급이 둘 이상 — uk_coupon_member 가 깨졌다
+    "UNATTRIBUTABLE",        # 이 발급을 어느 접수 키에 붙일지 정할 수 없다
     "DANGLING_IDEM",         # 멱등이 완료라는데 그 발급이 없다
 )
 PENDING = (
@@ -73,10 +77,11 @@ ALL_TYPES = CLEAN + DEFECT + PENDING
 # ⚠️ "대상 0이면 판정 불가" 로 뭉뚱그리지 않는다. 발급 덤프만 깨졌으면 멱등 쪽 판정은
 #    여전히 유효하고, 그것까지 버리면 진짜 검출을 가드가 덮는다.
 NEEDS = {
-    "issuances": ("MATCHED", "MATCHED_STATUS_CHANGED", "MATCHED_REJECTED", "LOST",
-                  "MISMATCH", "FALSE_REJECT", "ALREADY_ISSUED_CONFIRMED",
-                  "ALREADY_ISSUED_PHANTOM", "RESOLVED_ISSUED", "ORPHAN", "DUPLICATE",
-                  "DANGLING_IDEM"),
+    "issuances": tuple(t for t in ALL_TYPES if t != "INCOMPLETE"),
+    # 접수 키가 조인 축이다. 이력을 못 읽으면 "내 키의 발급" 을 아예 못 고른다.
+    "histories": ("MATCHED", "MATCHED_STATUS_CHANGED", "LOST", "KEY_MISMATCH",
+                  "TARGET_MISMATCH", "MISMATCH", "FALSE_REJECT", "RESOLVED_ISSUED",
+                  "ORPHAN", "DUPLICATE", "UNATTRIBUTABLE", "UNRESOLVED"),
     "idempotency": ("INCOMPLETE", "UNRESOLVED", "DANGLING_IDEM"),
     "records": ALL_TYPES,
 }
@@ -166,14 +171,31 @@ def conclude(outcomes):
     return "NO_RESPONSE", []          # REQ 만 있고 결과 줄이 없다. 이것도 결과 불명이다
 
 
-def judge(records, issuances, idem, target_round, judged):
-    """접수 키마다 하나, 그리고 DB 쪽에서 짝이 없는 것마다 하나씩 판정을 낸다."""
+def judge(records, issuances, histories, idem, target_round, judged):
+    """접수 키마다 하나, 그리고 DB 쪽에서 짝이 없는 것마다 하나씩 판정을 낸다.
+
+    **축이 둘이다.** 접수 키는 *"내 신청이 이 발급이 됐나"* 를 답하고, 대상(회차·회원)은
+    *"그 회원에게 이미 있나"* 를 답한다. 둘은 다른 질문이라 한쪽으로 갈음할 수 없다.
+
+    대상만으로 조인하면 **대상 오류를 낼 수가 없다** — 대상으로 찾았으니 찾힌 행의
+    대상은 언제나 맞다. 키만으로 조인하면 *"이미 발급받았다"* 는 거절을 확인할 수
+    없다 — 그 발급은 **다른 접수 키**가 만든 것이다.
+    """
     findings = []
     by_target = defaultdict(list)
     for row in issuances:
         by_target[(row["coupon_id"], row["member_id"])].append(row)
     by_id = {row["id"]: row for row in issuances}
-    seen_targets = set()
+
+    # 접수 키 ↔ 발급. 이력이 없는 발급과 키가 갈리는 발급을 함께 가려낸다.
+    mine_of, keys_of = defaultdict(list), defaultdict(set)
+    if histories is not None:
+        for issuance_id, request_id in histories:
+            keys_of[issuance_id].add(request_id)
+        for issuance_id, keys in keys_of.items():
+            if len(keys) == 1 and (only := next(iter(keys))):
+                mine_of[only].append(issuance_id)
+    claimed = set()
 
     def add(vtype, key, detail, **extra):
         if vtype in judged:
@@ -185,28 +207,42 @@ def judge(records, issuances, idem, target_round, judged):
                 f"한 접수 키에 대상이 {len(entry['targets'])}가지다")
             continue
         rnd, member = next(iter(entry["targets"]))
-        seen_targets.add((rnd, member))
-        rows = by_target.get((rnd, member), [])
         kind, values = conclude(entry["outcomes"])
         common = {"round": rnd, "member": member, "attempts": entry["attempts"]}
 
-        if len(rows) > 1:
-            add("DUPLICATE", key,
-                f"대상 하나에 발급이 {len(rows)}행 — {[r['id'] for r in rows]}", **common)
-            continue
+        # ① 내 접수 키가 만든 발급. ② 그 대상에 있는 발급. 서로 다른 질문이다.
+        mine = [by_id[i] for i in mine_of.get(key, []) if i in by_id]
+        at_target = by_target.get((rnd, member), [])
+        claimed.update(r["id"] for r in mine)
 
-        row = rows[0] if rows else None
+        if len(mine) > 1:
+            add("DUPLICATE", key,
+                f"한 접수 키가 발급 {[r['id'] for r in mine]} 를 만들었다 — 멱등이 깨졌다",
+                **common)
+            continue
+        row = mine[0] if mine else None
+
         if kind == "OK":
-            if row is None:
+            if row is None and not at_target:
                 got = ", ".join(v for v in values if v) or "예약번호 없음"
                 add("LOST", key, f"성공 응답({got})을 받았는데 발급이 없다", **common)
-            elif len(set(v for v in values if v)) > 1:
-                add("MISMATCH", key, f"한 접수 키에 예약번호가 여럿이다 — {sorted(set(values))}",
+            elif row is None:
+                # **대상만 보면 정상으로 보이는 자리다.** 발급은 있는데 내 접수 키가
+                # 아닌 다른 키로 만들어졌다. 그 발급은 아래 고아 검사에도 걸린다.
+                add("KEY_MISMATCH", key,
+                    f"발급 {[r['id'] for r in at_target]} 이 그 대상에 있는데"
+                    " 내 접수 키로 만들어진 것이 아니다", **common)
+            elif (row["coupon_id"], row["member_id"]) != (rnd, member):
+                add("TARGET_MISMATCH", key,
+                    f"내 접수 키의 발급 {row['id']} 이"
+                    f" 회차 {row['coupon_id']} · 회원 {row['member_id']} 앞으로 있다",
                     **common)
+            elif len({v for v in values if v}) > 1:
+                # 재전송이 서로 다른 예약번호를 받았다. 멱등이 깨졌다는 뜻이고,
+                # DB 에 한 행뿐이어도 그렇다 — 클라이언트가 받은 것이 증거다.
+                add("MISMATCH", key,
+                    f"한 접수 키에 예약번호가 여럿이다 — {sorted(set(values))}", **common)
             elif not any(values):
-                # 201 인데 예약번호가 없다. 응답 계약이 깨졌거나 본문을 못 읽은 것이다.
-                # 대상이 맞으니 발급 자체는 있지만, **무엇을 받았는지 확인이 안 된다** —
-                # 정상으로 세면 그 확인 불가가 사라진다.
                 add("MISMATCH", key,
                     f"성공 응답에서 예약번호를 못 읽었다 · DB 의 발급 {row['id']}",
                     **common)
@@ -223,22 +259,29 @@ def judge(records, issuances, idem, target_round, judged):
             # 증언이라, 매진 거절을 먼저 집으면 멀쩡한 발급이 거짓 거절로 잡힌다.
             code = (ALREADY_ISSUED_CODE if ALREADY_ISSUED_CODE in values
                     else values[0])
-            if code == ALREADY_ISSUED_CODE:
-                if row is None:
-                    add("ALREADY_ISSUED_PHANTOM", key,
-                        "이미 있다고 거절했는데 발급이 없다", **common)
-                else:
-                    add("ALREADY_ISSUED_CONFIRMED", key, f"발급 {row['id']}", **common)
-            elif row is not None:
+            if row is not None:
+                # 안 받았다면서 **내 키의** 발급이 생겼다. 커밋해 놓고 응답에서 터진 꼴이다.
                 add("FALSE_REJECT", key,
-                    f"{code} 로 거절했는데 발급 {row['id']} 이 있다", **common)
+                    f"{code} 로 거절했는데 내 접수 키의 발급 {row['id']} 이 있다", **common)
+            elif code == ALREADY_ISSUED_CODE:
+                # **이것은 대상에 대한 주장이다.** 그 발급은 다른 접수 키가 만들었으니
+                # 키로 찾으면 안 나오는 것이 정상이다.
+                if at_target:
+                    add("ALREADY_ISSUED_CONFIRMED", key,
+                        f"발급 {[r['id'] for r in at_target]}", **common)
+                else:
+                    add("ALREADY_ISSUED_PHANTOM", key,
+                        "이미 있다고 거절했는데 그 대상에 발급이 없다", **common)
             else:
+                # 대상에 남의 키로 만든 발급이 있어도 여기서 세지 않는다.
+                # 그 행은 고아로 한 번만 보고한다 — 같은 행을 두 번 세면 수가 부푼다.
                 add("MATCHED_REJECTED", key, code, **common)
         else:                                   # UNKNOWN · NO_RESPONSE
             reason = values[0] if values else "응답 줄 없음"
             if row is not None:
                 add("RESOLVED_ISSUED", key,
-                    f"결과 불명({reason})이었는데 발급 {row['id']} 이 있다", **common)
+                    f"결과 불명({reason})이었는데 내 접수 키의 발급 {row['id']} 이 있다",
+                    **common)
             elif idem is not None and key in idem \
                     and idem[key]["status"] != "DONE":
                 add("INCOMPLETE", key,
@@ -246,16 +289,39 @@ def judge(records, issuances, idem, target_round, judged):
                     **common)
             else:
                 add("UNRESOLVED", key,
-                    f"결과 불명({reason}) · DB 에 흔적이 없다", **common)
+                    f"결과 불명({reason}) · 내 접수 키의 발급이 없다", **common)
 
+    # ── DB 쪽에서 짝이 없는 것 ────────────────────────────────────────
     for (coupon, member), rows in sorted(by_target.items()):
-        if coupon != target_round or (coupon, member) in seen_targets:
+        if coupon != target_round or len(rows) <= 1:
             continue
-        # 고아에는 접수 키가 **없다** — 그것이 고아라는 뜻이다. 그렇다고 빈 문자열을
-        # 쓰면 전후 비교에서 모든 고아가 한 키로 뭉개져 잔여·신규·해소가 전부 1이 된다.
-        add("ORPHAN", f"대상:{coupon}/{member}",
-            f"발급 {[r['id'] for r in rows]} — 보낸 기록이 없다",
+        # 한 접수 키가 만든 중복이면 DUPLICATE 가 이미 보고했다. **같은 행을 두 번
+        # 세지 않는다** — 수가 부풀면 다음 사람이 결함을 두 배로 읽는다.
+        # 여기가 더하는 정보는 "서로 다른 키가 같은 대상에 발급을 만들었다" 뿐이다.
+        seen = {k for r in rows for k in keys_of.get(r["id"], {""})}
+        if histories is not None and len(seen) == 1:
+            continue
+        add("DUPLICATE_TARGET", f"대상:{coupon}/{member}",
+            f"한 대상에 서로 다른 접수 키의 발급이 {len(rows)}행"
+            f" — {[r['id'] for r in rows]}",
             round=coupon, member=member)
+
+    if histories is not None:
+        for row in sorted(issuances, key=lambda r: r["id"]):
+            if row["coupon_id"] != target_round or row["id"] in claimed:
+                continue
+            keys = {k for k in keys_of.get(row["id"], set()) if k}
+            if len(keys) != 1:
+                add("UNATTRIBUTABLE", f"발급:{row['id']}",
+                    "ISSUE 이력이 없다" if not keys
+                    else f"ISSUE 이력의 접수 키가 {len(keys)}가지다",
+                    round=row["coupon_id"], member=row["member_id"])
+            else:
+                # 고아의 이름은 **그 발급이 달고 있는 접수 키**다. 대상으로 이름
+                # 붙이면 같은 대상의 두 고아가 전후 비교에서 한 원소로 뭉개진다.
+                add("ORPHAN", next(iter(keys)),
+                    f"발급 {row['id']} 의 접수 키가 보낸 기록에 없다",
+                    round=row["coupon_id"], member=row["member_id"])
 
     if idem is not None:
         for key, rec in sorted(idem.items()):
@@ -315,10 +381,19 @@ def reconcile(rep: Path):
         completeness["idempotency"] = "PARTIAL"
         problems.append(str(e))
 
+    try:
+        # (발급 id, 접수 키). 조인 축이라 못 읽으면 대부분의 판정이 멈춘다.
+        histories = [(r[0], r[1]) for r in read_tsv(rep / "db-histories.tsv", 2)]
+        completeness["histories"] = "COMPLETE"
+    except Incomplete as e:
+        histories = None
+        completeness["histories"] = "PARTIAL"
+        problems.append(str(e))
+
     judged = {t for t in ALL_TYPES
               if all(t not in types or completeness[src] == "COMPLETE"
                      for src, types in NEEDS.items())}
-    findings = judge(records, issuances, idem, target_round, judged)
+    findings = judge(records, issuances, histories, idem, target_round, judged)
 
     counts = {t: 0 for t in sorted(judged)}
     for f in findings:
