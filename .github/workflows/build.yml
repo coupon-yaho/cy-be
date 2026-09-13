@@ -109,10 +109,37 @@ jobs:
       # 순수 파이썬이라 도커도 Gradle 데몬도 안 쓴다. mock 리시버와 문서 검사 스크립트는
       # 실행 가능한 코드인데 ./gradlew build 같은 게이트가 없어, 들여쓰기 하나가 틀어져도
       # compose 를 직접 띄우기 전까지 아무도 모른다.
+      #
+      # ⚠️ **파일을 하나씩 적지 않는다.** 예전에는 두 이름을 나열했고, 그 사이
+      #    perf/run/summarize.py 가 들어왔는데 여기를 아무도 안 고쳐서 **한 번도 안
+      #    돌았다.** 아래 «알림 규칙 검사» 가 CY-913 으로 배운 것과 같은 함정이다.
+      #    글롭으로 돌리고 0개면 실패시킨다 — 경로가 바뀌면 조용히 0건을 돌고 초록이 된다.
       - name: 파이썬 구문 검사
         run: |
-          python3 -m py_compile infra/alertmanager/alert-sink.py \
-                                scripts/check-doc-shell.py
+          set -euo pipefail
+          # NUL 로 받는다. git ls-files 는 공백이 든 경로를 따옴표로 안 감싼다.
+          ALL=()
+          while IFS= read -r -d '' f; do ALL+=("$f"); done < <(git ls-files -z '*.py')
+          [ "${#ALL[@]}" -gt 0 ] || { echo "::error::검사할 .py 를 못 찾았다"; exit 1; }
+          echo "파이썬 ${#ALL[@]}개"
+          python3 -m py_compile "${ALL[@]}"
+
+      # 구문 다음은 **동작**이다. py_compile 은 판정이 통째로 뒤집혀도 초록이다.
+      #
+      # reconcile.py 는 부하 뒤에 "내가 받은 그 건이 DB 에 있나" 를 가르는 코드고,
+      # 그 판정이 틀리면 **없는 유실을 보고하거나 있는 유실을 놓친다.** 둘 다 조용하다.
+      # 돌연변이 14종(유실 판정 뒤집기·305 특례 제거·센티널 무시·고아 회차 필터 제거
+      # 등)을 넣어 전부 잡히는 것을 확인한 시험이라, CI 가 매번 돌린다.
+      #
+      # ⚠️ 여기도 글롭이다. 새 시험 파일을 더한 사람이 이 줄을 안 고쳐도 돌아간다.
+      - name: 하네스 판정 시험
+        run: |
+          set -euo pipefail
+          ALL=()
+          while IFS= read -r -d '' f; do ALL+=("$f"); done \
+            < <(git ls-files -z 'perf/run/*_test.py')
+          [ "${#ALL[@]}" -gt 0 ] || { echo "::error::하네스 판정 시험을 못 찾았다"; exit 1; }
+          for f in "${ALL[@]}"; do echo "→ $f"; python3 "$f"; done
 
       # **문서 안 셸 블록은 «셸 스크립트 검사» 가 못 본다.** git ls-files '*.sh' 는 실물
       # 파일만 훑는데, docs/17 의 게이트 실행 절차는 붙여 넣어 돌리라고 둔 함수 덩어리다.
@@ -218,6 +245,20 @@ jobs:
           [ "${#OPS[@]}" -gt 0 ] || { echo "::error::scripts/ 에 .sh 가 없다"; exit 1; }
           docker run --rm -e LC_ALL=C.UTF-8 -v "$PWD:/mnt:ro" -w /mnt \
             koalaman/shellcheck:v0.10.0 "${OPS[@]}"
+
+          # perf/ 도 본다. 사람이 손으로 돌리는 코드라 scripts/ 보다 급이 낮지만,
+          # **거기서 실제로 버그를 냈다** — CY-960 이 `local a="$1" b="$a"` 를 썼고
+          # 같은 local 안의 앞 대입은 아직 안 보여서(실측) 출력 경로가 디렉터리가 됐다.
+          # bash -n 은 그것을 못 본다.
+          #
+          # ⚠️ --severity=warning 이다. note 까지 켜면 preflight.sh 의 SC2015 10건이
+          #    쏟아지는데, 그건 의도한 `A && B || C` 표시라 고칠 것이 아니다. 지금
+          #    warning 이상은 0건이고, 위 버그는 warning(SC2318)으로 잡힌다 — 확인했다.
+          PERF=()
+          while IFS= read -r -d '' f; do PERF+=("$f"); done < <(git ls-files -z 'perf/*.sh')
+          [ "${#PERF[@]}" -gt 0 ] || { echo "::error::perf/ 에 .sh 가 없다"; exit 1; }
+          docker run --rm -e LC_ALL=C.UTF-8 -v "$PWD:/mnt:ro" -w /mnt \
+            koalaman/shellcheck:v0.10.0 --severity=warning "${PERF[@]}"
 
       # 라우팅도 파싱한다. 여기가 깨지면 규칙은 평가되는데 알림이 아무 데도 안 간다.
       - name: 알림 라우팅 검사
