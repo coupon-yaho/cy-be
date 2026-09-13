@@ -1268,6 +1268,22 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(report["counts"]["NOTIFICATION_ORPHAN"], 1)
         self.assertEqual(report["counts"]["OUTBOX_MISSING"], 1)
 
+    def test_같은_유형의_알림_결함_둘이_한_원소로_뭉개지지_않는다(self):
+        """전후 비교는 **판정의 key 로** 잔여·신규·해소를 가른다.
+
+        이름을 대상(회차/회원)으로 붙이면 같은 대상의 둘이 한 원소가 되어, 하나가
+        고쳐졌는데도 "잔여" 로 남는다 — 고아 판정이 이미 밟은 함정이다.
+        """
+        records = [f"CY960\tREQ\tk{i}\t{ROUND}\t{MEMBER}\t{GRADE}" for i in (1, 2)]
+        records += [f"CY960\tOK\tk{i}\t{i}" for i in (1, 2)]
+        code, report, _ = self.check(
+            records,
+            [issuance(1, ROUND, MEMBER, "ISSUED"), issuance(2, ROUND, MEMBER, "ISSUED")],
+            notifications=[])
+        keys = [f["key"] for f in report["findings"]
+                if f["type"] == "NOTIFICATION_MISSING"]
+        self.assertEqual(len(set(keys)), 2, keys)
+
     def test_알림_덤프가_없으면_그_넷만_판정_불가다(self):
         """첫 구간의 판정은 살아 있어야 한다. 한 덤프가 빠졌다고 전부
         판정 불가로 내리면 **가드가 진짜 검출을 덮는다.**"""
