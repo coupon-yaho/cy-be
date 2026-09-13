@@ -14,6 +14,7 @@ import com.kafkick.api.observation.issuance.MeterEventRecorder;
 import com.kafkick.api.observation.resource.ResourceProvider;
 import com.kafkick.core.consistency.ConsistencyCalculator;
 import com.kafkick.core.coupon.v2.RequestTokenGenerator;
+import com.kafkick.core.notification.NotificationRequestService;
 import com.kafkick.core.coupon.v2.V2CouponIssueService;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.coupon.port.IdempotencyRepository;
@@ -133,6 +134,7 @@ public class ApiObservationAutoConfiguration {
             CouponStockRepository stocks,
             CouponCodeGenerator codeGenerator,
             IdempotencyResultCodec<CouponIssueResult> resultCodec,
+            NotificationRequestService notifications,
             RequestTokenGenerator tokenGenerator,
             PlatformTransactionManager transactionManager
     ) {
@@ -140,9 +142,13 @@ public class ApiObservationAutoConfiguration {
         // Boot 도 자동 등록하지 않는다. 조건에 넣으면 영원히 거짓이라 v2 가 조립되지 않고,
         // 그 사실은 첫 발급 요청의 500 으로만 드러난다(실측). 여기서 직접 만든다.
         // 생성자 인자는 조건 평가가 아니라 빈 생성 시점에 풀리므로 자동설정 순서와 무관하다.
+        // NotificationRequestService 도 조건에 안 넣는다 — 위 codec 과 같은 이유다.
+        // 그것은 core 컴포넌트 스캔에서 나오므로, 리포지터리는 있는데 이것만 없는 컨텍스트는
+        // 반쯤 얹은 것이고 그때는 조용히 빠지는 것보다 기동 실패가 낫다.
         return new V2CouponIssueService(
                 gate, issuances, histories, idempotencies, stocks, codeGenerator,
-                resultCodec, tokenGenerator, new TransactionTemplate(transactionManager)
+                resultCodec, notifications, tokenGenerator,
+                new TransactionTemplate(transactionManager)
         );
     }
 
