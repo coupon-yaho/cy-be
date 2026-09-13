@@ -392,19 +392,33 @@ def reconcile(rep: Path):
 
     # **기록기 자체를 잰다.** measure_attempts 는 k6 가 프로세스 안에서 센 측정 시도
     # 수이고, REQ 줄 수와 **같아야 한다** — 둘 다 measure() 한 번에 하나씩 는다.
-    dropped, attempts = 0, None
+    dropped, attempts, retries = 0, None, 0
     summary = rep / "k6-summary.json"
     if summary.exists():
         k6 = json.loads(summary.read_text())
         dropped = (k6.get("metrics", {})
                    .get("dropped_iterations", {}).get("values", {}).get("count", 0))
         attempts = k6.get("perf", {}).get("measure_attempts")
+        retries = k6.get("perf", {}).get("measure_retries") or 0
     recorded = sum(e["attempts"] for e in records.values())
+    applications = len(records)
     intact = completeness["records"] == "COMPLETE"
-    if intact and attempts is not None and recorded != attempts:
+    # **두 축을 다 본다.** 하나로는 못 잡는 것이 서로 다르다 — 같은 입력으로 견줘 봤다.
+    #
+    #   줄 == 시도 + 재전송   중복 기록·재전송 줄 유실을 잡는다
+    #   키 == 시도            **재전송이 새 키를 쓴 것**을 잡는다 (위 검사는 통과한다)
+    #
+    # 뒤엣것이 특히 중요하다. 재전송은 **같은 접수 키**여야 하고, 새 키를 쓰면 서버가
+    # 그것을 새 신청으로 보아 한 사람이 둘을 받는다. 그런데 줄 수는 그대로 맞는다.
+    if intact and attempts is not None and recorded != attempts + retries:
         problems.append(
-            f"k6 는 측정 시도를 {attempts}건으로 셌는데 기록은 {recorded}건이다"
+            f"k6 는 시도 {attempts} · 재전송 {retries} 로 셌는데 기록은 {recorded}줄이다"
             " — 기록이 온전하지 않다")
+        intact = False
+    if intact and attempts is not None and applications != attempts:
+        problems.append(
+            f"k6 는 시도를 {attempts}건으로 셌는데 서로 다른 접수 키가 {applications}개다"
+            " — 재전송이 같은 키를 안 썼을 수 있다")
         intact = False
     # 형식이 깨진 줄은 **시도 수로는 안 잡힌다.** REQ 는 멀쩡한데 결과 줄 하나가
     # 깨지면 시도 수가 그대로 맞고, 그 건은 조용히 "결과 불명" 이 된다 — 성공을 받은
@@ -444,7 +458,9 @@ def reconcile(rep: Path):
             # 총계로만 보인다 — 어느 키인지는 알 방법이 없다.
             "configured_requests": rnd["configured_requests"],
             "recorded_requests": recorded,
+            "recorded_applications": applications,
             "k6_measure_attempts": attempts,
+            "k6_measure_retries": retries,
             "dropped_iterations": int(dropped),
             "record_lines": stats["lines"],
             "foreign_lines": stats["foreign"],
@@ -483,9 +499,13 @@ def print_report(report):
     code, label = verdict(report)
     t = report["totals"]
     print(f"대조 — 회차 {report['input']['target_round_id']} · {report['input']['engine']}")
-    print(f"  기록 {t['recorded_requests']} / 설정 {t['configured_requests']} "
-          f"(못 쏨 {t['dropped_iterations']})")
-    unrecorded = (t["configured_requests"] - t["recorded_requests"]
+    print(f"  신청 {t['recorded_applications']} / 설정 {t['configured_requests']} "
+          f"(못 쏨 {t['dropped_iterations']} · 재전송 {t['k6_measure_retries']}"
+          f" · 기록 {t['recorded_requests']}줄)")
+    # ⚠️ **줄 수와 맞대면 안 된다.** 재전송이 있으면 줄이 신청보다 많아져 이 수가
+    #    음수로 나온다(실측: 설정 11 · 줄 16 → -5). 설정 요청 수가 세는 것은
+    #    **신청**이지 보낸 횟수가 아니다.
+    unrecorded = (t["configured_requests"] - t["recorded_applications"]
                   - t["dropped_iterations"])
     if unrecorded:
         print(f"  ⚠️ 설명 안 되는 {unrecorded}건 — 보낸 기록도 없고 못 쐈다는 기록도 없다")

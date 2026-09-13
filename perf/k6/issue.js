@@ -8,8 +8,9 @@
 // med 24ms -> 4ms, p95 861ms -> 12ms 로 떨어졌다. 버퍼풀과 JIT 가 지연 꼬리의 대부분이었다.
 import http from 'k6/http';
 import exec from 'k6/execution';
+import { sleep } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
-import { classify, OK, REJECTED, DEFERRED } from './outcome.js';
+import { classify, OK, REJECTED, DEFERRED, UNKNOWN } from './outcome.js';
 
 const BASE_URL = __ENV.BASE_URL;
 const TIMEOUT = __ENV.HTTP_TIMEOUT || '60s';
@@ -30,6 +31,20 @@ const TIMEOUT = __ENV.HTTP_TIMEOUT || '60s';
 // docs/measurements/record-overhead.sh). 회차당 4만 줄이 쌓이는 것이 이유고,
 // 대조할 회차에서만 켠다.
 const RECORD = String(__ENV.RECORD_REQUESTS || 'false') === 'true';
+
+// 결과 불명이면 **같은 접수 키로** 한 번 더 보낸다. 명세 F-U-03 이 요구하는 복구가
+// 그 경로이고(*"같은 키로 결과를 확인"*), 그러지 않으면 게이트의 REPLAY_DONE·
+// REPLAY_PENDING 이 회차 내내 한 번도 안 생긴다 — 대조의 "재전송은 한 신청" 판정도
+// 픽스처 밖에서는 만난 적이 없게 된다.
+//
+// 기본은 꺼짐이다. 켠 회차와 끈 회차는 **서버가 받는 요청 수가 다르므로**,
+// 나란히 비교할 회차끼리는 같은 설정이어야 한다.
+const RETRY_UNKNOWN = String(__ENV.RETRY_UNKNOWN || 'false') === 'true';
+// ⚠️ Retry-After 의 초를 그대로 따르지 않는다. 3초를 자면 재전송마다 VU 가 묶여
+//    도착률을 맞추려고 VU 가 몇 배로 늘고, 그러면 재려던 것이 바뀐다. 짧게 쉰다 —
+//    그래서 REPLAY_PENDING 에 곧바로 다시 물어 또 PENDING 을 받을 수 있고,
+//    그것도 사실이라 그대로 기록한다.
+const RETRY_DELAY_MS = Number(__ENV.RETRY_DELAY_MS || 200);
 
 const WARMUP_ROUND = __ENV.WARMUP_ROUND_ID;
 const TARGET_ROUND = __ENV.TARGET_ROUND_ID;
@@ -62,6 +77,8 @@ const errors = new Counter('issue_errors');
 // 서버가 **아직 안 정했다**고 말한 4xx. `Retry-After` 가 붙은 응답이다.
 // 거절과 같은 칸에 넣으면 안 된다 — 거절은 판정이고 이쪽은 판정이 없는 상태다.
 const deferred = new Counter('issue_deferred');
+// 같은 키로 다시 보낸 횟수. **이터레이션이 아니다** — 도착률에 안 들어간다.
+const retries = new Counter('issue_retries');
 // ⚠️ 내장 http_reqs 는 워밍업 시나리오까지 합산한다. 그 rate 는 "워밍업 + 대기 + 측정"
 //    전체 실행 시간으로 나눈 값이라 측정 구간의 달성 도착률이 아니다. 실측으로
 //    설정 800/s x 5s 회차에서 http_reqs.rate 가 185/s 로 나왔다 —
@@ -237,12 +254,27 @@ export function measure() {
   // 없는 것이 곧 "결과 불명" 이다 — 대조가 그것을 미해결로 다룬다.
   record('REQ', [key, TARGET_ROUND, memberId]);
 
-  const res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
+  let res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
+  let outcome = classify(res);
+  record(outcome.kind === DEFERRED ? 'UNKNOWN' : outcome.kind, [key, outcome.reason]);
 
-  // 판정은 outcome.js 가 한다 — 서버 없이 시험할 수 있어야 해서 갈라 뒀다.
-  const { kind, reason } = classify(res);
-  record(kind === DEFERRED ? 'UNKNOWN' : kind, [key, reason]);
+  // 결과 불명이면 **같은 키로** 한 번만 더 보낸다. 무한 재시도는 안 한다 — 계속
+  // 불명이면 그것이 사실이고, 대조가 미해결로 남기는 것이 맞다.
+  if (RETRY_UNKNOWN
+      && (outcome.kind === UNKNOWN || outcome.kind === DEFERRED)) {
+    retries.add(1);
+    sleep(RETRY_DELAY_MS / 1000);
+    // 보내기 전에 남긴다. 첫 요청과 같은 규칙이다.
+    record('REQ', [key, TARGET_ROUND, memberId]);
+    res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
+    outcome = classify(res);
+    record(outcome.kind === DEFERRED ? 'UNKNOWN' : outcome.kind, [key, outcome.reason]);
+  }
 
+  // 지표는 **마지막 응답 하나**만 센다. 한 이터레이션이 여러 칸을 올리면
+  // 성공+거절+보류+5xx 합이 시도 수와 안 맞아 요약표의 산수가 깨진다.
+  // 재전송이 있었다는 사실은 issue_retries 가 따로 말한다.
+  const { kind, reason } = outcome;
   if (kind === OK) {
     successes.add(1);
     successDuration.add(res.timings.duration);
@@ -286,8 +318,12 @@ export function handleSummary(data) {
   const attempts = (data.metrics.issue_attempts
     && data.metrics.issue_attempts.values.count) || 0;
   const clock = data.metrics.measure_clock_ms && data.metrics.measure_clock_ms.values;
+  const retryCount = (data.metrics.issue_retries
+    && data.metrics.issue_retries.values.count) || 0;
   data.perf = {
     measure_attempts: attempts,
+    // 같은 키로 다시 보낸 횟수. 대조가 `기록 줄 수 == 시도 + 재전송` 을 본다.
+    measure_retries: retryCount,
     // Prometheus 질의를 자를 창. 없으면 호출부가 <측정 실패> 로 다뤄야 한다.
     measure_window_start_epoch: clock ? Math.floor(clock.min / 1000) : null,
     measure_window_end_epoch: clock ? Math.ceil(clock.max / 1000) : null,
