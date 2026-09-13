@@ -608,6 +608,7 @@ def diff(before, after):
 
 
 def print_diff(out):
+    cleared = 0
     if not out["per_key"]:
         print("⚠️ 회차가 다르다. 유형별 집계만 비교한다 — 키 단위 비교는 뜻이 없다")
     print(f"{out['before']}  →  {out['after']}")
@@ -619,9 +620,20 @@ def print_diff(out):
         if e["comparable"]:
             line += (f"   잔여 {len(e['residual'])} ·"
                      f" 신규 {len(e['new'])} · 해소 {len(e['cleared'])}")
+            cleared += len(e["cleared"])
         elif t in out["not_comparable"]:
             line += "   비교 불가 — 한쪽이 이 유형을 판정하지 못했다"
         print(line)
+    if cleared:
+        # **이 표는 변화를 말하지 원인을 말하지 않는다.** 요구사항 §6.3 —
+        # *"자동 복구를 주장하려면 해당 키의 재시도·처리 이력도 확인"*.
+        # 여기서 원인을 적으면 검사기가 미정인 것을 확정하는 셈이 된다.
+        print(f"\n  ⓘ 해소 {cleared}건은 상태가 변했다는 **사실**이다."
+              " 왜 변했는지는 이 표가 말하지 않는다 —")
+        print("     늦게 들어온 등록일 수도, 다른 경로의 보상일 수도,"
+              " 사람이 손댄 것일 수도 있다.")
+        print("     이유를 보려면 그 키의 처리 이력(issuance_histories 의"
+              " 상태 전이)을 따로 읽는다.")
     return 0
 
 
