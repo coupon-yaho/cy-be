@@ -400,15 +400,25 @@ def reconcile(rep: Path):
                    .get("dropped_iterations", {}).get("values", {}).get("count", 0))
         attempts = k6.get("perf", {}).get("measure_attempts")
     recorded = sum(e["attempts"] for e in records.values())
-    if attempts is not None and completeness["records"] == "COMPLETE" \
-            and recorded != attempts:
+    intact = completeness["records"] == "COMPLETE"
+    if intact and attempts is not None and recorded != attempts:
         problems.append(
             f"k6 는 측정 시도를 {attempts}건으로 셌는데 기록은 {recorded}건이다"
             " — 기록이 온전하지 않다")
-        # **적기만 하고 넘어가지 않는다.** 기록이 짧으면 빠진 키가 애초에 없던 것처럼
-        # 보여, 결함 0 인 보고서가 종료코드 0 으로 나간다. 잘린 덤프를 빈 덤프로 읽지
-        # 않는 것과 같은 이유다. 몇 건까지 봐 줄지는 안 재 봤고, **안 잰 임계값을
-        # 박는 대신 어긋나면 판정하지 않는다.**
+        intact = False
+    # 형식이 깨진 줄은 **시도 수로는 안 잡힌다.** REQ 는 멀쩡한데 결과 줄 하나가
+    # 깨지면 시도 수가 그대로 맞고, 그 건은 조용히 "결과 불명" 이 된다 — 성공을 받은
+    # 건이 유실(결함)이 아니라 미해결(보류)로 내려간다. 실측으로 확인했다.
+    if intact and stats["malformed"]:
+        problems.append(
+            f"형식이 깨진 기록 줄이 {stats['malformed']}줄이다 — 그 줄이 무엇이었는지"
+            " 알 수 없다. 결과 줄이 깨졌으면 성공한 건이 결과 불명으로 보인다")
+        intact = False
+    if not intact and completeness["records"] == "COMPLETE":
+        # **적기만 하고 넘어가지 않는다.** 기록이 온전치 않으면 빠지거나 깨진 키가
+        # 애초에 없던 것처럼 보여, 결함이 보류로 내려가거나 아예 안 보인다. 잘린
+        # 덤프를 빈 덤프로 읽지 않는 것과 같은 이유다. 몇 줄까지 봐 줄지는 안 재
+        # 봤고, **안 잰 임계값을 박는 대신 어긋나면 판정하지 않는다.**
         completeness["records"] = "PARTIAL"
         records = {}
 

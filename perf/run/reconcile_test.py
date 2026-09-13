@@ -180,6 +180,28 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("온전하지 않다", proc.stderr)
         self.assertEqual(code, 3)
 
+    def test_결과_줄이_깨지면_판정하지_않는다(self):
+        # **시도 수로는 안 잡히는 자리다.** REQ 는 멀쩡하니 k6 가 센 수와 똑같고,
+        # 깨진 것은 결과 줄 하나뿐이다. 그대로 두면 성공을 받은 건이 결과 불명이 되어
+        # 유실(결함, 종료 1)이 미해결(보류, 종료 4)로 내려간다 — 실측으로 확인했다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}"])
+        self.assertEqual(report["totals"]["malformed_lines"], 1)
+        self.assertEqual(report["completeness"]["records"], "PARTIAL")
+        self.assertEqual(self.types(report), {})
+        self.assertEqual(code, 3)
+
+    def test_남의_줄은_형식_깨짐이_아니라서_판정을_안_막는다(self):
+        # 접두사가 없는 줄은 우리 기록이 아니다. 그것까지 막으면 k6 가 낸 아무 줄
+        # 하나에 대조가 통째로 멈춘다.
+        code, report, _ = self.check(
+            ["k6 가 낸 아무 줄", f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+             f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+        self.assertEqual(report["completeness"]["records"], "COMPLETE")
+        self.assertEqual(self.types(report), {"MATCHED": 1})
+        self.assertEqual(code, 0)
+
     def test_기록이_짧으면_있던_결함도_판정하지_않는다(self):
         # 짧은 기록으로 낸 유실 수는 실제보다 작다. 그 수를 내놓으면 보는 사람이
         # 그것을 전부로 읽는다 — 안 세는 편이 낫다.
@@ -525,9 +547,11 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(report["totals"]["foreign_lines"], 2)
         self.assertEqual(code, 0)
 
-    def test_칸_수가_틀린_기록은_형식_깨짐으로_센다(self):
-        _, report, _ = self.check([f"CY960\tREQ\t{KEY}\t{ROUND}"])
+    def test_칸_수가_틀린_기록은_형식_깨짐으로_세고_판정을_멈춘다(self):
+        code, report, _ = self.check([f"CY960\tREQ\t{KEY}\t{ROUND}"])
         self.assertEqual(report["totals"]["malformed_lines"], 1)
+        self.assertEqual(report["completeness"]["records"], "PARTIAL")
+        self.assertEqual(code, 3)
 
     def test_기록_파일이_없으면_아무것도_판정하지_않는다(self):
         with tempfile.TemporaryDirectory() as tmp:
