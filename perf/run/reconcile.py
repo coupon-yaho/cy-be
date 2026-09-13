@@ -89,9 +89,10 @@ ALL_TYPES = CLEAN + DEFECT + PENDING
 NOTIFICATION_TYPES = ("NOTIFICATION_MISSING", "OUTBOX_MISSING",
                       "NOTIFICATION_TARGET_MISMATCH", "NOTIFICATION_ORPHAN")
 
-# 알림을 만드는 것은 발급이 성립했을 때뿐이다. 취소·사용으로 상태가 변한 뒤에도
-# 알림은 남아 있으므로, "알림이 있어야 한다" 의 조건은 **발급 행의 존재**이지
-# 상태가 아니다. 상태로 거르면 늦게 취소된 건이 알림 고아로 잡힌다.
+# 알림 하나에 반드시 있어야 하는 아웃박스 행 — (attempt_seq, trigger).
+# NotificationRequestService 가 INITIAL_ATTEMPT_SEQUENCE=1 · AttemptTrigger.INITIAL
+# 로 넣는 그 행이고, 외부 키(`notificationId:attemptSeq`)의 시작이 이것이다.
+# 덤프가 TSV 라 회차 번호도 문자열로 비교한다.
 NOTIFICATION_OUTBOX_INITIAL = ("1", "INITIAL")
 
 # 판정에 무엇이 필요한가. 그 입력이 불완전하면 그 유형은 판정하지 않는다.
