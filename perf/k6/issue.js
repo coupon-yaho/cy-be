@@ -24,7 +24,10 @@ const TIMEOUT = __ENV.HTTP_TIMEOUT || '60s';
 // 그리고 **양쪽에서 동시에 빠진 건**은 성공 목록으로도 DB 대조로도 못 잡는다.
 // 요청을 보냈다는 기록이 **요청보다 먼저** 있어야만 보인다.
 //
-// 끄면 한 줄도 안 나간다 — 기록이 필요 없는 회차에서 로그를 2배로 만들지 않는다.
+// 기본은 꺼짐이다. **속도 때문이 아니다** — 1,000~6,667/s 에서 끔/켬의 달성 도착률
+// 차이가 같은 조건의 흔들림보다 작았고, 1.3만 줄/초에서 한 줄도 안 샜다(실측:
+// docs/measurements/record-overhead.sh). 회차당 4만 줄이 쌓이는 것이 이유고,
+// 대조할 회차에서만 켠다.
 const RECORD = String(__ENV.RECORD_REQUESTS || 'false') === 'true';
 
 const WARMUP_ROUND = __ENV.WARMUP_ROUND_ID;
