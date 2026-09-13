@@ -178,11 +178,23 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.types(report), {})
         self.assertEqual(code, 0)
 
+    def test_재전송이_있어도_설명_안_되는_건이_음수가_안_된다(self):
+        # **설정 요청 수가 세는 것은 신청이지 보낸 횟수가 아니다.** 줄 수와 맞대면
+        # 재전송만큼 음수가 나온다 — 실제 k6 출력으로 돌려 보다 잡았다(설정 11 ·
+        # 줄 16 → "설명 안 되는 -5건").
+        _, report, proc = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")], configured=1)
+        self.assertEqual(report["totals"]["recorded_applications"], 1)
+        self.assertEqual(report["totals"]["recorded_requests"], 2)
+        self.assertNotIn("설명 안 되는", proc.stdout)
+
     def test_기록도_못쏨도_아닌_요청은_총계로_드러난다(self):
         _, report, proc = self.check(
             [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
             [(ISSUANCE, ROUND, MEMBER, "ISSUED")], configured=5, dropped=2)
-        # 설정 5 − 기록 1 − 못 쏨 2 = 2건이 어디에도 없다.
+        # 설정 5 − 신청 1 − 못 쏨 2 = 2건이 어디에도 없다.
         self.assertIn("설명 안 되는 2건", proc.stdout)
 
     def test_k6_가_센_시도와_기록_줄_수가_어긋나면_판정하지_않는다(self):

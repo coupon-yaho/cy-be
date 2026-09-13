@@ -499,9 +499,13 @@ def print_report(report):
     code, label = verdict(report)
     t = report["totals"]
     print(f"대조 — 회차 {report['input']['target_round_id']} · {report['input']['engine']}")
-    print(f"  기록 {t['recorded_requests']} / 설정 {t['configured_requests']} "
-          f"(못 쏨 {t['dropped_iterations']})")
-    unrecorded = (t["configured_requests"] - t["recorded_requests"]
+    print(f"  신청 {t['recorded_applications']} / 설정 {t['configured_requests']} "
+          f"(못 쏨 {t['dropped_iterations']} · 재전송 {t['k6_measure_retries']}"
+          f" · 기록 {t['recorded_requests']}줄)")
+    # ⚠️ **줄 수와 맞대면 안 된다.** 재전송이 있으면 줄이 신청보다 많아져 이 수가
+    #    음수로 나온다(실측: 설정 11 · 줄 16 → -5). 설정 요청 수가 세는 것은
+    #    **신청**이지 보낸 횟수가 아니다.
+    unrecorded = (t["configured_requests"] - t["recorded_applications"]
                   - t["dropped_iterations"])
     if unrecorded:
         print(f"  ⚠️ 설명 안 되는 {unrecorded}건 — 보낸 기록도 없고 못 쐈다는 기록도 없다")
