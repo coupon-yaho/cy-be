@@ -13,6 +13,20 @@ import { Counter, Trend } from 'k6/metrics';
 const BASE_URL = __ENV.BASE_URL;
 const TIMEOUT = __ENV.HTTP_TIMEOUT || '60s';
 
+// ④ 독립 요청 기록. **요청을 보내기 전에** 접수 키·대상을 남기고, 응답을 받은 뒤
+//    결과를 같은 키에 잇는다.
+//
+// **성공만 모으면 안 된다.** 응답이 유실된 건은 성공 목록에서 통째로 빠지는데,
+// 그 건은 접수됐을 수도 안 됐을 수도 있다 — **어느 쪽인지 모른다는 것이 사실**이고
+// 그 사실이 기록에 남아야 한다. 안 남기면 그 건이 "정상" 으로 보이거나(안 세면)
+// "유실" 오탐이 된다(세면).
+//
+// 그리고 **양쪽에서 동시에 빠진 건**은 성공 목록으로도 DB 대조로도 못 잡는다.
+// 요청을 보냈다는 기록이 **요청보다 먼저** 있어야만 보인다.
+//
+// 끄면 한 줄도 안 나간다 — 기록이 필요 없는 회차에서 로그를 2배로 만들지 않는다.
+const RECORD = String(__ENV.RECORD_REQUESTS || 'false') === 'true';
+
 const WARMUP_ROUND = __ENV.WARMUP_ROUND_ID;
 const TARGET_ROUND = __ENV.TARGET_ROUND_ID;
 const WARMUP_RATE = Number(__ENV.WARMUP_RATE || 300);
@@ -123,6 +137,26 @@ function uuidV4From(roundId, memberId) {
   return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
 }
 
+// 한 줄 = 한 사건. 하네스가 `--log-format=raw --console-output=<파일>` 로 돌리므로
+// 이 줄은 k6 진행 로그와 섞이지 않고 그 파일에만 들어간다. 실측한 것 둘.
+//
+//   · `--log-format=raw` 가 없으면 k6 가 logfmt 으로 감싸 `msg="CY960\tREQ\t..."` 로
+//     나가고 **탭이 이스케이프된다.** 그러면 읽는 쪽이 logfmt 을 풀고 다시
+//     언이스케이프해야 한다.
+//   · `--console-output` 이 담는 것은 **스크립트의 console.* 뿐**이다. k6 자신의
+//     경고(예: `Request Failed`)는 stderr 로 갔다.
+//
+// 그래도 접두사를 뗄 수 없다. 같은 파일에 다른 `console.*` 한 줄만 들어와도 기록이
+// 오염되는데, **그 오염은 대조 결과가 틀린 뒤에야 보인다.**
+//
+// 탭 구분이다. 값에 탭이 없다는 것이 전제이고, 접수 키는 UUID·대상은 숫자다.
+function record(kind, fields) {
+  if (!RECORD) {
+    return;
+  }
+  console.log(`CY960\t${kind}\t${fields.join('\t')}`);
+}
+
 function issue(roundId, memberId, grade) {
   return http.post(
     `${BASE_URL}/api/v1/coupons/${roundId}/issue`,
@@ -142,6 +176,20 @@ function issue(roundId, memberId, grade) {
   );
 }
 
+// 기록이 켜진 회차라는 표식. **한 줄이지만 이게 없으면 대조가 위험해진다.**
+//
+// `--console-output` 은 기록을 꺼도 파일을 만든다. 그 빈 파일을 "요청 0건" 으로 읽으면
+// 대조가 **회차의 발급 전부를 고아로** 보고한다 — 아무 문제 없는 회차에서 만 건짜리
+// 거짓 결함이 나온다. 그래서 대조는 이 줄이 있을 때만 판정한다.
+//
+// 회차 번호를 함께 싣는 이유는 따로 있다. `--console-output` 은 **덮어쓰지 않고 이어
+// 쓴다**(실측). 같은 디렉터리에 두 번 쏘면 앞 회차의 기록이 그대로 남아 있고, 그 키들은
+// 이번 회차 DB 에 없으니 전부 미해결로 보인다. 대조가 회차로 걸러 낸다.
+export function setup() {
+  record('RUN', [TARGET_ROUND]);
+  return {};
+}
+
 export function warmup() {
   const memberId = WARMUP_MEMBER_BASE + exec.scenario.iterationInTest;
   const res = issue(WARMUP_ROUND, memberId, WARMUP_MEMBER_GRADE);
@@ -154,6 +202,12 @@ export function measure() {
   // 회차 단위 1인 1매다. 매 요청 서로 다른 회원이어야 하고, 그래서 요청 수만큼
   // 회원이 필요하다. 겹치면 ALREADY_ISSUED 가 나고 발급 경로가 아니라 멱등 경로를 잰다.
   const memberId = MEMBER_BASE + exec.scenario.iterationInTest;
+  const key = uuidV4From(TARGET_ROUND, memberId);
+
+  // **보내기 전에** 남긴다. 여기서 프로세스가 죽어도 REQ 는 남고, 짝이 되는 RES 가
+  // 없는 것이 곧 "결과 불명" 이다 — 대조가 그것을 미해결로 다룬다.
+  record('REQ', [key, TARGET_ROUND, memberId]);
+
   const res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
 
   // ⚠️ 연결이 아예 안 된 실패는 status 0 이고 duration 이 0 이다. 이것을 응답 지연으로
@@ -169,25 +223,47 @@ export function measure() {
     } else {
       otherTransportErrors.add(1, tag);        // TLS·HTTP2·그 밖
     }
+    // **연결 실패도 "안 됐다" 가 아니다.** 타임아웃은 서버가 이미 커밋했을 수 있고,
+    // 연결 거부는 대개 아니다 — 그러나 여기서 가르지 않는다. 가르는 것은 대조가
+    // DB 를 보고 할 일이고, 여기서 단정하면 그 판단을 미리 굳힌다.
+    record('UNKNOWN', [key, String(ec)]);
     return;
   }
 
   if (res.status === 201) {
     successes.add(1);
     successDuration.add(res.timings.duration);
+    record('OK', [key, issuanceIdOf(res)]);
     return;
   }
 
   const code = errorCodeOf(res);
   if (res.status >= 500) {
     errors.add(1, { code: code });
+    // 5xx 는 **명시적 거절이 아니다.** 서버가 커밋하고 응답에서 터졌을 수 있다.
+    record('UNKNOWN', [key, `HTTP-${res.status}`]);
     return;
   }
   rejections.add(1, { code: code });
+  // 4xx 는 서버가 **안 받았다고 말한 것**이다. 그것만 명시적 거절로 둔다.
+  record('REJECTED', [key, code]);
   if (code === 'COUPON-306') {
     soldOutDuration.add(res.timings.duration);
   } else {
     otherRejectDuration.add(res.timings.duration);
+  }
+}
+
+// 201 응답의 예약번호. 없으면 빈 문자열이다 — **없다는 사실도 기록한다.**
+// 201 인데 id 가 없으면 응답 계약이 깨진 것이고, 그것을 조용히 빼면 대조가
+// "그 건은 애초에 없었다" 로 읽는다.
+function issuanceIdOf(res) {
+  try {
+    const body = res.json();
+    const id = body && body.data && body.data.issuanceId;
+    return id === undefined || id === null ? '' : String(id);
+  } catch (e) {
+    return '';
   }
 }
 
