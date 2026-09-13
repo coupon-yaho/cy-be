@@ -1034,6 +1034,43 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("비교 불가", proc.stdout)
         self.assertNotIn("신규 1", proc.stdout)
 
+    def test_해소를_복구_원인으로_말하지_않는다(self):
+        """요구사항 §6.3 「복구 증거 구분」.
+
+        > 전후 차이는 **상태 변화의 증거다.** 자동 복구를 주장하려면 해당 키의
+        > 재시도·처리 이력도 확인.
+
+        미해결이 지워진 이유는 늦은 등록일 수도, 다른 경로의 보상일 수도, 사람이
+        손댄 것일 수도 있다 — **스냅샷 둘로는 못 가른다.**
+        """
+        records = [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+                   f"CY960\tUNKNOWN\t{KEY}\t1050"]
+        with tempfile.TemporaryDirectory() as tmp:
+            before = self._report(tmp, "before", records)
+            after = self._report(tmp, "after", records,
+                                 [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            proc = subprocess.run(
+                [sys.executable, str(CLI), "--diff", str(before), str(after)],
+                capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("해소 1", proc.stdout)
+        # 변화는 말하되 **원인은 말하지 않는다.**
+        self.assertIn("왜 변했는지는 이 표가 말하지 않는다", proc.stdout)
+        self.assertIn("issuance_histories", proc.stdout)
+        self.assertNotIn("늦게 들어온 등록이고", proc.stdout)
+
+    def test_해소가_없으면_그_안내를_안_낸다(self):
+        # 할 말이 없을 때 경고를 붙이면 다음부터 아무도 안 읽는다.
+        records = [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+                   f"CY960\tUNKNOWN\t{KEY}\t1050"]
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self._report(tmp, "a", records)
+            b = self._report(tmp, "b", records)
+            proc = subprocess.run(
+                [sys.executable, str(CLI), "--diff", str(a), str(b)],
+                capture_output=True, text=True)
+        self.assertNotIn("왜 변했는지는", proc.stdout)
+
     def test_회차가_다르면_키_단위로_비교하지_않는다(self):
         with tempfile.TemporaryDirectory() as tmp:
             a = self._report(tmp, "a", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])
