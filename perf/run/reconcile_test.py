@@ -71,19 +71,26 @@ class Fixture:
     def __init__(self, tmp, records, issuances=(), idem=(), *,
                  configured=1, dropped=0, round_id=ROUND,
                  write_issuances=True, write_idem=True, marker=True,
-                 measure_attempts=None, histories=None, write_histories=True):
+                 measure_attempts=None, measure_retries=None,
+                 histories=None, write_histories=True):
         self.dir = Path(tmp)
         (self.dir / "round.json").write_text(json.dumps({
             "engine": "V2", "target_round_id": round_id,
             "configured_requests": configured}))
         # measure_attempts 는 k6 가 늘 낸다. 픽스처가 빼면 런타임에 없는 형상이 된다 —
         # 기본은 이 파일의 REQ 줄 수와 맞춘다.
+        # k6 는 **이터레이션**을 시도로 세고, 같은 키의 재전송은 시도가 아니라
+        # 재전송으로 센다. 픽스처가 REQ 줄 수를 시도로 쓰면 재전송이 있는 회차에서
+        # 런타임에 없는 모양이 된다 — 실제로 그렇게 썼다가 시험 셋이 빨개졌다.
+        mine = [r.split("\t") for r in records
+                if r.startswith("CY960\tREQ\t") and r.split("\t")[3:4] == [str(round_id)]]
         attempts = measure_attempts if measure_attempts is not None else len(
-            [r for r in records
-             if r.startswith("CY960\tREQ\t") and r.split("\t")[3:4] == [str(round_id)]])
+            {r[2] for r in mine})
+        retries = measure_retries if measure_retries is not None else (
+            len(mine) - len({r[2] for r in mine}))
         (self.dir / "k6-summary.json").write_text(json.dumps({
             "metrics": {"dropped_iterations": {"values": {"count": dropped}}},
-            "perf": {"measure_attempts": attempts}}))
+            "perf": {"measure_attempts": attempts, "measure_retries": retries}}))
         # 기록이 켜진 회차의 파일에는 setup() 이 낸 표식이 **반드시** 앞에 있다.
         # 픽스처가 그것을 빼면 런타임에 없는 형상을 시험하게 된다.
         head = [f"CY960\tRUN\t{round_id}"] if marker else []
@@ -189,6 +196,46 @@ class ReconcileTest(unittest.TestCase):
         self.assertTrue(any("온전하지 않다" in p for p in report["problems"]),
                         report["problems"])
         self.assertIn("온전하지 않다", proc.stderr)
+        self.assertEqual(code, 3)
+
+    def test_재전송이_있어도_기록이_온전하면_판정한다(self):
+        # 같은 키로 두 번 보낸 회차다. 예전 검사(줄 수 == 시도)는 이걸 "기록이
+        # 짧다/길다" 로 오탐했다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+        self.assertEqual(report["completeness"]["records"], "COMPLETE")
+        self.assertEqual(report["totals"]["k6_measure_retries"], 1)
+        self.assertEqual(self.types(report), {"MATCHED": 1})
+        self.assertEqual(code, 0)
+
+    def test_재전송이_새_키를_쓰면_잡는다(self):
+        """**줄 수 검사로는 못 잡는 자리다.**
+
+        재전송은 같은 접수 키여야 한다. 새 키를 쓰면 서버가 그것을 새 신청으로 보아
+        한 사람이 둘을 받는다 — 그런데 `줄 == 시도 + 재전송` 은 그대로 맞는다.
+        """
+        other = "99999999-8888-4777-8666-555555555555"
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{other}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{other}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            measure_attempts=1, measure_retries=1)   # k6 는 한 신청·한 재전송으로 셌다
+        self.assertEqual(report["completeness"]["records"], "PARTIAL")
+        self.assertTrue(any("같은 키를 안 썼을 수 있다" in p for p in report["problems"]),
+                        report["problems"])
+        self.assertEqual(code, 3)
+
+    def test_재전송_줄이_유실되면_잡는다(self):
+        # 키 수는 맞는데 줄이 하나 모자라다. 키 검사로는 못 잡는다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            measure_attempts=1, measure_retries=1)
+        self.assertEqual(report["completeness"]["records"], "PARTIAL")
+        self.assertTrue(any("기록이 온전하지 않다" in p for p in report["problems"]),
+                        report["problems"])
         self.assertEqual(code, 3)
 
     def test_결과_줄이_깨지면_판정하지_않는다(self):

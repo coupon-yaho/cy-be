@@ -81,6 +81,8 @@ k6 run "$PERF_DIR/k6/issue.js" \
   -e "HTTP_TIMEOUT=${PERF_HTTP_TIMEOUT:-60s}" \
   -e "OUT_JSON=$OUT/k6-summary.json" \
   -e "RECORD_REQUESTS=${PERF_RECORD_REQUESTS:-false}" \
+  -e "RETRY_UNKNOWN=${PERF_RETRY_UNKNOWN:-false}" \
+  -e "RETRY_DELAY_MS=${PERF_RETRY_DELAY_MS:-200}" \
   --log-format=raw \
   --console-output="$OUT/requests.log" \
   2>&1 | tee "$OUT/k6.log"
