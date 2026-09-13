@@ -17,10 +17,17 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import summarize as S  # noqa: E402
+from reconcile import SCHEMA  # noqa: E402
 
 
 def report(counts=None, unjudged=()):
-    return {"counts": counts or {}, "unjudged": list(unjudged),
+    """진짜 대조 보고서의 모양.
+
+    **`schema` 를 빼면 안 된다.** `latest_report` 가 모양을 확인해서 아닌 것을
+    판정 불가로 올리므로, 픽스처가 반쪽이면 걸러지는 것이 정상인 파일을 "보고서" 로
+    놓고 시험하게 된다 — 실제로 그렇게 썼다가 시험 넷이 빨개졌다.
+    """
+    return {"schema": SCHEMA, "counts": counts or {}, "unjudged": list(unjudged),
             "generated_at": "2026-09-13T00:00:00+00:00"}
 
 
