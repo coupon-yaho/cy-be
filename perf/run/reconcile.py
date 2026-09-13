@@ -456,7 +456,7 @@ def judge(records, issuances, histories, idem, target_round, judged,
             # 사실 둘이고, 이어 붙이면 앞 갈래가 뒤를 삼킨다. 게이트가 달라서도
             # 그렇다 — 발급 덤프가 깨지면 위 둘은 판정이 눌리는데 이 검사는 산다.
             #
-            # 있어야 할 행이 **있는지**만 본다. 여분의 행(수동 재처리의 2회차)은
+            # 있어야 할 행이 **있는지**만 본다. 여분의 행(수동 재처리의 2번째 시도)은
             # 결함이 아니다 — 없는 것만 결함이다.
             if not any(seq == NOTIFICATION_OUTBOX_INITIAL[0]
                        and trigger == NOTIFICATION_OUTBOX_INITIAL[1]

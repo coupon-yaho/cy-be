@@ -82,12 +82,12 @@ lease도 두지 않는다(D21).
 ### 5.1 트랜잭션 경계 (D1)
 
 ```text
-[발급 트랜잭션]  issuance 저장 · notifications(PENDING) · outbox(PENDING) 저장 · 재고 차감
+[발급 트랜잭션]  issuance · notifications(PENDING) · outbox(PENDING) · 재고 차감
+                 ↑ 무엇이 들어가는지의 목록이다. 순서는 엔진마다 다르다 (아래)
       ↓ 커밋
 [outbox relay]   claim → coupon.notify 발행 → PUBLISHED 확정            ← DB 락 밖 발행
 ```
 
-위 줄은 **한 트랜잭션에 무엇이 들어가는지**를 적은 것이고, 그 안의 순서는 엔진마다 다르다.
 v1(`CouponIssueService`)은 재고를 점유한 **뒤** 알리고, v2(`V2CouponIssueService`)는 알린
 **뒤** 점유한다. v2 가 v1 의 순서를 따라 하면 재고 행 X-lock 을 쥔 채로 INSERT 를 둘 더 하게
 돼 발급 경로가 직렬화된다. 순서가 갈려도 **매진으로 롤백될 발급을 알리지 않는다**는 양쪽 다

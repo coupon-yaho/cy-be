@@ -81,8 +81,9 @@ def derive_notifications(issuances):
     안에서 딱 그 둘을 넣으므로, 알림 없는 발급을 기본값으로 두면 멀쩡한 회차가
     전부 NOTIFICATION_MISSING 으로 빨개진다.
 
-    릴레이는 부하 회차에서 꺼져 있어(PERF_BATCH_SCHEDULING_ENABLED=false) 상태가
-    둘 다 PENDING 에서 멈춘다. 그것이 정지 상태의 정상이다.
+    상태를 둘 다 PENDING 으로 두는 것은 request() 가 그렇게 넣기 때문이다(코드로
+    확인). 릴레이가 돌면 SENT·PUBLISHED 로 바뀌는데, **판정 넷 중 어느 것도 상태를
+    안 읽으므로 답은 같다** — 그 경우도 시험 하나로 태운다.
     """
     return [(iid + NOTIFICATION_ID_BASE, iid, cid, mid, "PENDING", 1, "INITIAL", "PENDING")
             for iid, cid, mid, _status, _content in issuances]
@@ -1215,9 +1216,9 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("아웃박스가 아예 없다",
                       [f["detail"] for f in report["findings"]])
 
-    def test_첫_회차_아웃박스가_없으면_결함이다(self):
+    def test_첫_시도_아웃박스가_없으면_결함이다(self):
         """외부 키의 뒷자리가 attempt_seq 다. `(1, INITIAL)` 이 그 시작이고,
-        그것 없이 2회차만 있으면 시작을 건너뛴 것이다."""
+        그것 없이 2번째 시도만 있으면 시작을 건너뛴 것이다."""
         records, issuances = self.sent()
         code, report, _ = self.check(records, issuances, notifications=[
             (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER, "PENDING",
@@ -1226,7 +1227,7 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(report["counts"]["OUTBOX_MISSING"], 1)
 
     def test_수동_재처리로_아웃박스가_둘이어도_정상이다(self):
-        """**여분은 결함이 아니다.** 승인된 재처리는 새 회차를 정당하게 만든다 —
+        """**여분은 결함이 아니다.** 승인된 재처리는 새 시도를 정당하게 만든다 —
         없는 것만 결함이라고 못 박아 두지 않으면 정상 운영이 빨개진다."""
         records, issuances = self.sent()
         code, report, _ = self.check(records, issuances, notifications=[
