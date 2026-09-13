@@ -562,12 +562,36 @@ def unused_path(rep: Path, generated_at: str):
     return candidate
 
 
+# 심각도 순위. **종료코드 크기순이 아니다** — 결함(1)이 판정 불가(3)·보류(4)보다
+# 나쁘다. 묶음에서 가장 나쁜 것을 고르려면 이 순위로 견줘야 한다.
+SEVERITY = {0: 0, 4: 1, 3: 2, 1: 3}
+CODE_NAME = {0: "정상", 1: "결함", 3: "판정 불가", 4: "보류"}
+
+
+def worst_code(codes):
+    """묶음의 종료코드. 하나라도 결함이면 결함이다."""
+    return max(codes, key=lambda c: SEVERITY.get(c, 3)) if codes else 0
+
+
+def run_one(rep, out_path=None):
+    report = reconcile(rep)
+    # 실행별로 남기고 **덮어쓰지 않는다.** 덮어쓰면 "다시 대조했더니 해소됐다" 를
+    # 보여 줄 상대가 사라진다 — 그 비교가 늦은 등록과 진짜 유실을 가르는 유일한 수단이다.
+    # 이름이 초 단위라 같은 초에 두 번 돌면 앞 결과가 사라지므로, 비어 있는 이름을
+    # 찾을 때까지 뒤에 번호를 붙인다. 마이크로초를 안 쓰는 이유는 사람이 읽어서다.
+    out = Path(out_path) if out_path else unused_path(rep, report["generated_at"])
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    code = print_report(report)
+    print(f"  → {out}")
+    return code
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("paths", nargs="+", metavar="경로")
     p.add_argument("--diff", action="store_true", help="대조 결과 두 개를 비교한다")
-    p.add_argument("--out", help="결과 JSON 을 쓸 경로. 기본은 반복 디렉터리 아래 타임스탬프")
+    p.add_argument("--out", help="결과 JSON 을 쓸 경로. 반복 하나일 때만 쓴다")
     args = p.parse_args()
 
     if args.diff:
@@ -576,20 +600,20 @@ def main():
         a, b = (json.loads(Path(x).read_text()) for x in args.paths)
         return print_diff(diff(a, b))
 
-    if len(args.paths) != 1:
-        p.error("반복 디렉터리 하나를 받는다")
-    rep = Path(args.paths[0])
-    report = reconcile(rep)
-    # 실행별로 남기고 **덮어쓰지 않는다.** 덮어쓰면 "다시 대조했더니 해소됐다" 를
-    # 보여 줄 상대가 사라진다 — 그 비교가 늦은 등록과 진짜 유실을 가르는 유일한 수단이다.
-    # 이름이 초 단위라 **같은 초에 두 번 돌면 앞 결과가 사라진다** — 덮어쓰지 않겠다는
-    # 약속이 그 자리에서 깨진다. 비어 있는 이름을 찾을 때까지 뒤에 번호를 붙인다.
-    # 마이크로초를 안 쓰는 이유는 이 이름을 사람이 읽고 고르기 때문이다.
-    out = Path(args.out) if args.out else unused_path(rep, report["generated_at"])
-    out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
-    code = print_report(report)
-    print(f"  → {out}")
-    return code
+    if args.out and len(args.paths) != 1:
+        p.error("--out 은 반복 하나일 때만 쓴다 — 여럿이면 서로 덮어쓴다")
+    if len(args.paths) == 1:
+        return run_one(Path(args.paths[0]), args.out)
+
+    codes = []
+    for path in args.paths:
+        print(f"\n\u2500\u2500 {path}")
+        # **하나가 결함이어도 멈추지 않는다.** 첫 반복에서 멈추면 나머지를 못 본다.
+        codes.append(run_one(Path(path)))
+    order = sorted(set(codes), key=lambda c: SEVERITY.get(c, 3))
+    print(f"\n묶음 {len(codes)}개 — "
+          + " · ".join(f"{CODE_NAME.get(c, c)} {codes.count(c)}" for c in order))
+    return worst_code(codes)
 
 
 if __name__ == "__main__":

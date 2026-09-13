@@ -20,6 +20,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CLI = HERE / "reconcile.py"
 
+# 순위 계산처럼 프로세스를 띄울 필요가 없는 것은 직접 부른다.
+sys.path.insert(0, str(HERE))
+import reconcile as reconcile_mod  # noqa: E402
+
 ROUND = 7001          # 회차
 MEMBER = 4200         # 회원 — 회차와 자릿수까지 다르게 둔다
 ISSUANCE = 990001     # 발급 번호
@@ -593,6 +597,77 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.types(report), {"MATCHED": 1})
         self.assertEqual(report["totals"]["other_round_records"], 1)
         self.assertEqual(code, 0)
+
+    # ── 묶음 (CY-964) ────────────────────────────────────────────────
+
+    def _rep(self, root, name, records, issuances=(), idem=(), histories=None):
+        d = Path(root) / name
+        d.mkdir(parents=True)
+        Fixture(d, records, issuances, idem, histories=histories)
+        return d
+
+    def batch(self, *dirs):
+        proc = subprocess.run([sys.executable, str(CLI), *[str(d) for d in dirs]],
+                              capture_output=True, text=True)
+        return proc.returncode, proc
+
+    def test_반복을_여럿_주면_전부_돈다(self):
+        ok = [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"]
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self._rep(tmp, "rep-1", ok, [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            b = self._rep(tmp, "rep-2", ok, [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            code, proc = self.batch(a, b)
+            written = [len(list(d.glob("reconcile-*.json"))) for d in (a, b)]
+        self.assertEqual(written, [1, 1])          # 반복마다 자기 보고서가 남는다
+        self.assertIn("묶음 2개 — 정상 2", proc.stdout)
+        self.assertEqual(code, 0)
+
+    def test_하나가_결함이어도_나머지를_판정한다(self):
+        # 첫 반복에서 멈추면 나머지를 못 본다. 결함 반복을 **앞에** 둔다.
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = self._rep(tmp, "rep-1",
+                            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                             f"CY960\tOK\t{KEY}\t{ISSUANCE}"])           # 발급 없음 → LOST
+            good = self._rep(tmp, "rep-2",
+                             [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                              f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+                             [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            code, proc = self.batch(bad, good)
+            after = len(list(good.glob("reconcile-*.json")))
+        self.assertEqual(after, 1, "뒤 반복이 판정되지 않았다")
+        self.assertIn("묶음 2개", proc.stdout)
+        self.assertEqual(code, 1)
+
+    def test_묶음의_종료코드는_가장_나쁜_것이다(self):
+        # **크기순이 아니다.** 결함(1)이 판정 불가(3)·보류(4)보다 나쁘다.
+        self.assertEqual(reconcile_mod.worst_code([0, 4, 3, 1]), 1)
+        self.assertEqual(reconcile_mod.worst_code([0, 4, 3]), 3)
+        self.assertEqual(reconcile_mod.worst_code([0, 4]), 4)
+        self.assertEqual(reconcile_mod.worst_code([0, 0]), 0)
+        self.assertEqual(reconcile_mod.worst_code([]), 0)
+
+    def test_보류와_결함이_섞이면_결함이_이긴다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pending = self._rep(tmp, "rep-1",
+                                [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])  # UNRESOLVED
+            defect = self._rep(tmp, "rep-2",
+                               [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                                f"CY960\tOK\t{KEY}\t{ISSUANCE}"])            # LOST
+            code, proc = self.batch(pending, defect)
+        self.assertIn("결함 1", proc.stdout)
+        self.assertIn("보류 1", proc.stdout)
+        self.assertEqual(code, 1)
+
+    def test_묶음에는_out_을_못_쓴다(self):
+        # 반복마다 자기 보고서가 남아야 한다. 한 경로로 몰면 서로 덮어쓴다.
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self._rep(tmp, "rep-1", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            b = self._rep(tmp, "rep-2", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            proc = subprocess.run(
+                [sys.executable, str(CLI), str(a), str(b), "--out", f"{tmp}/x.json"],
+                capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 2)          # argparse 사용법 오류
+        self.assertIn("--out 은 반복 하나일 때만", proc.stderr)
 
     # ── 전후 비교 ────────────────────────────────────────────────────
 
