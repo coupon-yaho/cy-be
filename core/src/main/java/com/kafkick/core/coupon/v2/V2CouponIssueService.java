@@ -30,6 +30,7 @@ import com.kafkick.core.coupon.v2.port.ClaimOutcome;
 import com.kafkick.core.coupon.v2.port.CompensateOutcome;
 import com.kafkick.core.coupon.v2.port.CompleteOutcome;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
+import com.kafkick.core.notification.NotificationRequestService;
 import com.kafkick.core.observation.Dependency;
 import com.kafkick.core.observation.EngineVersion;
 
@@ -57,6 +58,7 @@ public final class V2CouponIssueService {
     private final CouponStockRepository stocks;
     private final CouponCodeGenerator codeGenerator;
     private final IdempotencyResultCodec<CouponIssueResult> resultCodec;
+    private final NotificationRequestService notifications;
     private final RequestTokenGenerator tokenGenerator;
     private final TransactionOperations transactions;
 
@@ -68,6 +70,7 @@ public final class V2CouponIssueService {
             CouponStockRepository stocks,
             CouponCodeGenerator codeGenerator,
             IdempotencyResultCodec<CouponIssueResult> resultCodec,
+            NotificationRequestService notifications,
             RequestTokenGenerator tokenGenerator,
             TransactionOperations transactions
     ) {
@@ -78,6 +81,7 @@ public final class V2CouponIssueService {
         this.stocks = Objects.requireNonNull(stocks, "stocks");
         this.codeGenerator = Objects.requireNonNull(codeGenerator, "codeGenerator");
         this.resultCodec = Objects.requireNonNull(resultCodec, "resultCodec");
+        this.notifications = Objects.requireNonNull(notifications, "notifications");
         this.tokenGenerator = Objects.requireNonNull(tokenGenerator, "tokenGenerator");
         this.transactions = Objects.requireNonNull(transactions, "transactions");
     }
@@ -201,6 +205,16 @@ public final class V2CouponIssueService {
         if (!inserted) {
             throw new IllegalStateException("완료된 멱등 레코드가 저장되지 않았습니다.");
         }
+        // 알림은 **재고 점유 앞**에 둔다. v1 은 점유 뒤에 부르는데(CouponIssueService),
+        // 여기서 그 순서를 따라 하면 재고 행 X-lock 을 쥔 채로 INSERT 둘을 더 하게 되고
+        // 바로 아래 주석이 막으려는 직렬화가 되살아난다.
+        //
+        // **순서를 바꿔도 "매진으로 롤백될 발급을 알리지 않는다" 는 지켜진다.**
+        // request() 는 알림·아웃박스 INSERT 둘뿐이고 발행은 안 한다 — 아래 점유가
+        // SOLD_OUT 으로 던지면 이 트랜잭션이 통째로 롤백되면서 둘 다 사라진다.
+        // v1 의 순서는 그 보장을 순서로 한 것이고, 여기서는 롤백이 한다.
+        notifications.request(saved);
+
         // Redis는 빠른 선점·중복 게이트일 뿐이다. Sentinel 승격이 마지막 DECR을 잃어도 이
         // 조건부 UPDATE가 총량을 넘기지 않으므로 DB가 최종 발급 권한이다. 반드시 마지막에
         // 둔다: 같은 재고 행 X-lock에 앞선 INSERT들을 묶으면 회차 전체가 직렬화된다.
