@@ -741,6 +741,21 @@ class ReconcileTest(unittest.TestCase):
             ("counts 가 목록", {"schema": reconcile_mod.SCHEMA, "counts": [], "unjudged": []}),
             ("unjudged 가 사전", {"schema": reconcile_mod.SCHEMA, "counts": {}, "unjudged": {}}),
             ("객체가 아님", [1, 2, 3]),
+            # 그릇만 보면 모자란다. 셋 다 다른 방식으로 나쁘다 — 재서 확인했다.
+            ("counts 값이 문자열",                       # 접다가 TypeError 로 요약이 죽는다
+             {"schema": reconcile_mod.SCHEMA, "counts": {"LOST": "1"}, "unjudged": []}),
+            ("counts 값이 음수",
+             {"schema": reconcile_mod.SCHEMA, "counts": {"LOST": -1}, "unjudged": []}),
+            ("counts 값이 bool",                          # True 를 1건으로 세면 안 된다
+             {"schema": reconcile_mod.SCHEMA, "counts": {"LOST": True}, "unjudged": []}),
+            ("counts 키가 숫자",                          # 안 터지고 **조용히 사라진다**
+             {"schema": reconcile_mod.SCHEMA, "counts": {7: 1}, "unjudged": []}),
+            ("counts 키가 모르는 이름",
+             {"schema": reconcile_mod.SCHEMA, "counts": {"LOSTT": 1}, "unjudged": []}),
+            ("unjudged 에 숫자",                          # 정렬에서 죽는다
+             {"schema": reconcile_mod.SCHEMA, "counts": {}, "unjudged": ["LOST", 3]}),
+            ("unjudged 에 모르는 이름",
+             {"schema": reconcile_mod.SCHEMA, "counts": {}, "unjudged": ["LOSTT"]}),
         ]
         for label, payload in cases:
             with self.subTest(label):
@@ -749,6 +764,11 @@ class ReconcileTest(unittest.TestCase):
                     (d / "reconcile-20260913T034512+0000.json").write_text(json.dumps(payload))
                     got = reconcile_mod.latest_report(d)
                 self.assertIn("unreadable", got, label)
+
+    def test_아는_유형과_정수면_통과한다(self):
+        ok = {"schema": reconcile_mod.SCHEMA,
+              "counts": {"LOST": 3, "MATCHED": 0}, "unjudged": ["ORPHAN"]}
+        self.assertIsNone(reconcile_mod.report_shape_problem(ok))
 
     def test_모양이_맞으면_그대로_낸다(self):
         with tempfile.TemporaryDirectory() as tmp:

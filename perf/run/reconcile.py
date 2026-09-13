@@ -588,10 +588,26 @@ def report_shape_problem(report):
         return f"{type(report).__name__} 이다"
     if report.get("schema") != SCHEMA:
         return f"schema 가 {report.get('schema')!r} 다"
-    if not isinstance(report.get("counts"), dict):
+    counts = report.get("counts")
+    if not isinstance(counts, dict):
         return "counts 가 없거나 사전이 아니다"
-    if not isinstance(report.get("unjudged"), list):
+    unjudged = report.get("unjudged")
+    if not isinstance(unjudged, list):
         return "unjudged 가 없거나 목록이 아니다"
+    # **그릇만 보면 모자란다.** 재 보니 셋 다 다른 방식으로 나빴다.
+    #   · 값이 문자열이면 접다가 TypeError 로 요약 전체가 죽는다
+    #   · unjudged 에 숫자가 섞이면 정렬에서 죽는다
+    #   · **키가 모르는 이름이면 아무 일도 안 난다** — 그 결함이 조용히 사라진다.
+    #     터지는 것보다 이쪽이 나쁘다. 그래서 키도 아는 유형인지 본다.
+    for name, n in counts.items():
+        if name not in ALL_TYPES:
+            return f"counts 에 모르는 유형 {name!r} 이 있다"
+        # bool 은 int 의 하위형이다. True 를 1건으로 세지 않는다.
+        if isinstance(n, bool) or not isinstance(n, int) or n < 0:
+            return f"counts[{name!r}] 이 음이 아닌 정수가 아니다"
+    for name in unjudged:
+        if name not in ALL_TYPES:
+            return f"unjudged 에 모르는 유형 {name!r} 이 있다"
     return None
 
 
