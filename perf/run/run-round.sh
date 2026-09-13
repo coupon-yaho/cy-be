@@ -50,6 +50,21 @@ log "등급 헤더 — 측정 $TARGET_GRADE · 워밍업 $WARMUP_GRADE (회차 �
 TIME_WAIT_BEFORE=$(netstat -an -p tcp 2>/dev/null | grep -c TIME_WAIT || echo "")
 START_EPOCH=$(date +%s)
 log "k6 — 설정 도착률 ${RATE}/s x ${SECONDS_}s (설정값이다. 달성치는 결과의 perf.achieved_arrival_rps 를 본다 — http_reqs.rate 가 아니다)"
+# PERF_RECORD_REQUESTS=true 면 독립 요청 기록이 requests.log 로 나간다.
+#
+# --console-output 은 console.log 만 그 파일로 뺀다. 안 쓰면 k6.log 에 섞여
+# 사람이 읽을 수 없게 되고, 요청 수만큼 줄이 늘어난다.
+#
+# --log-format=raw 가 없으면 k6 가 logfmt 으로 감싸 `msg="CY960\tREQ\t..."` 로
+# 나가고 **탭이 이스케이프된다**(실측). 그러면 대조 스크립트가 logfmt 을 풀고
+# 다시 언이스케이프해야 한다. raw 면 진짜 탭이 그대로 나온다.
+#
+# ⚠️ raw 는 k6 자신의 진행 로그 형식도 바꾼다. k6.log 를 사람이 읽을 때
+#    타임스탬프가 빠지므로, 시각이 필요하면 round.json 의 구간을 쓴다.
+#
+# ⚠️ --console-output 은 **덮어쓰지 않고 이어 쓴다**(실측). 같은 $OUT 에 두 번 쏘면
+#    앞 회차의 기록이 그대로 남는다. k6 가 회차 시작 표식을 남기고 reconcile.py 가
+#    그것으로 걸러 내지만, 반복마다 새 디렉터리를 쓰는 것이 원칙이다.
 set +e
 k6 run "$PERF_DIR/k6/issue.js" \
   -e "BASE_URL=http://$A_HOST:${PERF_LB_PORT:-8080}" \
@@ -65,6 +80,9 @@ k6 run "$PERF_DIR/k6/issue.js" \
   -e "WARMUP_MEMBER_BASE=${PERF_WARMUP_MEMBER_BASE:-1}" \
   -e "HTTP_TIMEOUT=${PERF_HTTP_TIMEOUT:-60s}" \
   -e "OUT_JSON=$OUT/k6-summary.json" \
+  -e "RECORD_REQUESTS=${PERF_RECORD_REQUESTS:-false}" \
+  --log-format=raw \
+  --console-output="$OUT/requests.log" \
   2>&1 | tee "$OUT/k6.log"
 K6_RC=${PIPESTATUS[0]}
 set -e
