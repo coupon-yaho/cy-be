@@ -559,34 +559,41 @@ def report_paths(rep: Path):
     `…+0000.json` 보다 **앞선다.** `-10` 은 `-2` 보다도 앞선다(문자열 비교).
     실제로 정렬해 보고 확인했다.
 
-    그래서 파일을 열어 `generated_at` 을 읽고, 같은 시각이면 접미사 번호로 가른다.
-    보고서는 반복당 몇 개뿐이라 전부 열어도 싸다.
+    그래서 이름을 (시각, 접미사 번호)로 **쪼개서** 정렬한다. 시각 부분은 UTC 고정
+    너비라 문자열 비교가 맞고, 접미사는 숫자로 견준다.
+
+    **파일 내용은 안 읽는다.** 예전에는 `generated_at` 을 읽어 정렬했는데, 못 읽은
+    파일을 맨 앞으로 보내는 바람에 **최신 보고서가 잘리면 옛 보고서가 최신 행세를
+    했다** — 요약이 그 옛 결과로 `OK` 를 찍는다. 순서는 이름만으로 정한다.
     """
     rows = []
     for path in rep.glob("reconcile-*.json"):
         stem = path.stem[len("reconcile-"):]
         # `<시각>` 또는 `<시각>-<번호>`. 번호가 없으면 첫 번째다.
         head, _, tail = stem.rpartition("-")
-        suffix = int(tail) if head and tail.isdigit() else 1
-        try:
-            when = json.loads(path.read_text()).get("generated_at", "")
-        except (OSError, json.JSONDecodeError):
-            # 못 읽은 보고서를 조용히 빼지 않는다. 시각을 모르니 맨 앞에 둔다 —
-            # 최신으로 잘못 골라 그 내용을 요약에 싣는 것이 더 나쁘다.
-            when = ""
-        rows.append((when, suffix, path))
+        if head and tail.isdigit():
+            rows.append((head, int(tail), path))
+        else:
+            rows.append((stem, 1, path))
     return [r[2] for r in sorted(rows, key=lambda r: (r[0], r[1]))]
 
 
 def latest_report(rep: Path):
-    """가장 나중 대조 결과. 없으면 None — **"대조 안 함" 과 "깨끗함" 은 다르다.**"""
+    """가장 나중 대조 결과.
+
+    셋을 가른다 — 보고서가 **없으면** `None`("대조 안 함"), 있는데 **못 읽으면**
+    `{"unreadable": …}`, 정상이면 그 내용이다.
+
+    ⚠️ **못 읽었다고 이전 보고서로 물러서지 않는다.** 최신 쓰기가 잘린 상황에서
+    옛 결과를 최신으로 내면, 그 사이에 생긴 유실이 요약에서 사라진다.
+    """
     paths = report_paths(rep)
     if not paths:
         return None
     try:
         return json.loads(paths[-1].read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
+    except (OSError, json.JSONDecodeError) as e:
+        return {"unreadable": f"{paths[-1].name} — {type(e).__name__}"}
 
 
 def unused_path(rep: Path, generated_at: str):

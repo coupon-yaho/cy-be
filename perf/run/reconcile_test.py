@@ -703,13 +703,40 @@ class ReconcileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertIsNone(reconcile_mod.latest_report(Path(tmp)))
 
-    def test_깨진_보고서를_최신으로_고르지_않는다(self):
+    def test_옛_보고서가_깨져도_최신을_고른다(self):
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "reconcile-20260913T034512+0000.json").write_text("{ 깨짐")
             (d / "reconcile-20260913T034513+0000.json").write_text(
                 json.dumps({"generated_at": "2026-09-13T03:45:13+00:00", "mark": "멀쩡"}))
             self.assertEqual(reconcile_mod.latest_report(d)["mark"], "멀쩡")
+
+    def test_최신_보고서가_깨지면_옛것으로_물러서지_않는다(self):
+        # 최신 쓰기가 잘린 상황이다. **옛 결과를 최신으로 내면 그 사이에 생긴 유실이
+        # 사라지고, 요약이 옛 보고서로 OK 를 찍는다.** 못 읽었다고 말해야 한다.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "reconcile-20260913T034512+0000.json").write_text(
+                json.dumps({"generated_at": "2026-09-13T03:45:12+00:00",
+                            "counts": {}, "unjudged": []}))
+            (d / "reconcile-20260913T034513+0000.json").write_text("{ 잘림")
+            got = reconcile_mod.latest_report(d)
+        self.assertIn("unreadable", got)
+        self.assertIn("034513", got["unreadable"])
+
+    def test_순서는_파일_내용을_안_읽고_정한다(self):
+        # 내용으로 정렬하면 못 읽은 파일의 자리를 정할 수 없다. 이름만으로 정한다.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            for n in ("reconcile-20260913T034512+0000.json",
+                      "reconcile-20260913T034512+0000-2.json",
+                      "reconcile-20260913T034513+0000.json"):
+                (d / n).write_text("{ 전부 깨짐")
+            self.assertEqual(
+                [p.name for p in reconcile_mod.report_paths(d)],
+                ["reconcile-20260913T034512+0000.json",
+                 "reconcile-20260913T034512+0000-2.json",
+                 "reconcile-20260913T034513+0000.json"])
 
     def test_대조가_실제로_남긴_파일도_골라낸다(self):
         # 위 시험들은 이름을 손으로 만들었다. **진짜 대조가 낸 파일**로도 도는지 본다 —
@@ -727,8 +754,11 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(len(paths), 2, names)
         self.assertIsNotNone(latest)
         self.assertEqual(latest, tail)
-        # 접미사 붙은 쪽이 나중이다 — 사전순이면 반대로 골랐을 것이다.
-        self.assertTrue(names[-1].endswith("-2.json"), names)
+        # ⚠️ **접미사가 붙는다고 단언하지 않는다.** 두 실행이 초 경계를 넘으면
+        #    접미사 없이 시각만 달라져, 그 단언은 간헐적으로 빨개진다. 접미사 순서
+        #    자체는 위의 손 픽스처 시험이 결정적으로 태운다. 여기서 볼 것은
+        #    **진짜 이름도 파싱된다**는 것뿐이다.
+        self.assertTrue(all(n.startswith("reconcile-") for n in names), names)
 
     # ── 전후 비교 ────────────────────────────────────────────────────
 

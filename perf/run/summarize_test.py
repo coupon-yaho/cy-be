@@ -116,6 +116,17 @@ class ReconcileInSummaryTest(unittest.TestCase):
         self.assertEqual(S.reconcile_flags({"reps": 0, "done": 0, "counts": {},
                                             "unjudged": []}), [])
 
+    def test_최신_보고서를_못_읽으면_안_함과_다르게_적는다(self):
+        flags = S.reconcile_flags(S.fold_reconcile(
+            reps({"unreadable": "reconcile-x.json — JSONDecodeError"})))
+        self.assertTrue(any("못 읽음" in f for f in flags), flags)
+        self.assertFalse(any("대조 안 함" in f for f in flags), flags)
+
+    def test_못_읽은_보고서는_판정에_안_쓴다(self):
+        folded = S.fold_reconcile(reps(report({"LOST": 2}), {"unreadable": "x"}))
+        self.assertEqual(folded["counts"], {"LOST": 2})
+        self.assertEqual((folded["reps"], folded["done"], folded["unreadable"]), (2, 1, 1))
+
     # ── 실제 출력 (여기가 이 티켓의 핵심이다) ────────────────────────
 
     def _run_dir(self, tmp, name, reconcile_counts, with_report=True):
@@ -133,6 +144,18 @@ class ReconcileInSummaryTest(unittest.TestCase):
             (d / "reconcile-20260913T000000+0000.json").write_text(
                 json.dumps(report(reconcile_counts)))
         return Path(tmp) / name
+
+    def _dead_rep(self, d, counts):
+        """k6 가 비정상 종료한 반복. 성능 표본에서는 빠지지만 대조 보고서는 남는다."""
+        d.mkdir(parents=True)
+        (d / "k6-summary.json").write_text(json.dumps({"metrics": {}, "perf": {}}))
+        (d / "round.json").write_text(json.dumps(
+            {"configured_rate_per_sec": 6667, "configured_requests": 20001,
+             "engine": "V2", "k6_exit_code": 137,
+             "db_after": {"over_issued": 0, "members_with_two_or_more": 0,
+                          "issuances": 0}}))
+        (d / "meta.json").write_text(json.dumps(FULL_META))
+        (d / "reconcile-20260913T000000+0000.json").write_text(json.dumps(report(counts)))
 
     def invariant_line(self, run_dir):
         import io, contextlib
@@ -156,6 +179,28 @@ class ReconcileInSummaryTest(unittest.TestCase):
             line = self.invariant_line(self._run_dir(tmp, "B", None, with_report=False))
         self.assertIn("대조 안 함", line)
         self.assertNotIn("OK", line)
+
+    def test_k6_가_죽은_반복의_유실도_요약에_나온다(self):
+        """**대조는 성능과 따로 접는다.**
+
+        `load_rep` 은 k6 가 비정상 종료한 반복을 뺀다 — 그 반복의 분위수는 못 믿는다.
+        그런데 `reconcile.sh` 는 그 반복도 돌아 보고서를 남긴다. 성능 표본에서 뺐다고
+        유실까지 빼면 **죽은 회차의 결함이 통째로 사라진다** — 정작 그때가 유실이
+        가장 잘 나는 자리다.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self._run_dir(tmp, "D", {"MATCHED": 20000})       # rep-1: 정상
+            self._dead_rep(run / "rate-6667" / "rep-2", {"LOST": 7})
+            line = self.invariant_line(run)
+        self.assertIn("LOST 7", line)
+        self.assertNotIn("OK", line)
+
+    def test_반복이_전부_죽어도_대조는_본다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "E"
+            self._dead_rep(run / "rate-6667" / "rep-1", {"ORPHAN": 4})
+            line = self.invariant_line(run)
+        self.assertIn("ORPHAN 4", line)
 
     def test_대조까지_깨끗해야_OK_다(self):
         with tempfile.TemporaryDirectory() as tmp:

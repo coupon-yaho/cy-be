@@ -109,7 +109,6 @@ def summarize_group(reps):
     for k in keys:
         out[k] = med([r[k] for r in reps])
         out[k + "_all"] = [r[k] for r in reps]
-    out["reconcile"] = fold_reconcile(reps)
     out["over_issued_any"] = any(r["over_issued"] for r in reps)
     out["dup_members_max"] = max(r["dup_members"] for r in reps)
     out["ping_avg_ms"] = med([r["ping_avg_ms"] for r in reps])
@@ -126,7 +125,11 @@ def fold_reconcile(reps):
     적용 범위도 함께 낸다. 5회 중 3회만 대조했으면 나머지 2회는 **안 본 것**이고,
     그 사실이 안 보이면 3회의 결과가 5회의 결과로 읽힌다.
     """
-    done = [r["reconcile"] for r in reps if r["reconcile"]]
+    found = [r["reconcile"] for r in reps if r["reconcile"]]
+    # 못 읽은 보고서는 **판정에 안 쓴다.** 그 반복은 "대조했는데 결과를 모른다" 이고,
+    # 옛 보고서로 물러서면 그 사이의 유실이 사라진다.
+    unreadable = [r for r in found if "unreadable" in r]
+    done = [r for r in found if "unreadable" not in r]
     counts = {}
     unjudged = set()
     for rep in done:
@@ -134,20 +137,26 @@ def fold_reconcile(reps):
             if n:
                 counts[name] = counts.get(name, 0) + n
         unjudged |= set(rep.get("unjudged", []))
-    return {"reps": len(reps), "done": len(done), "counts": counts,
-            "unjudged": sorted(unjudged)}
+    return {"reps": len(reps), "done": len(done), "unreadable": len(unreadable),
+            "counts": counts, "unjudged": sorted(unjudged)}
 
 
 def reconcile_flags(rc):
     """「불변식」 줄에 실을 문구. 빈 목록이면 대조까지 깨끗하다는 뜻이다."""
     if rc is None or rc["reps"] == 0:
         return []
-    if rc["done"] == 0:
-        # **침묵하면 OK 로 읽힌다.** 안 한 것과 했고 깨끗한 것은 다르다.
-        return ["대조 안 함 — PERF_RECORD_REQUESTS 를 켜고 perf/run/reconcile.sh 를 부른다"]
     flags = []
+    if rc.get("unreadable"):
+        # 대조는 돌았는데 결과를 못 읽었다. "안 함" 과도 "깨끗함" 과도 다르다.
+        flags.append(f"대조 보고서 {rc['unreadable']}건을 못 읽음 — 그 반복은 판정 불가다")
+    if rc["done"] == 0:
+        if not flags:
+            # **침묵하면 OK 로 읽힌다.** 안 한 것과 했고 깨끗한 것은 다르다.
+            flags.append("대조 안 함 — PERF_RECORD_REQUESTS 를 켜고"
+                         " perf/run/reconcile.sh 를 부른다")
+        return flags
     if rc["done"] < rc["reps"]:
-        flags.append(f"대조 {rc['reps']}회 중 {rc['done']}회만 함")
+        flags.append(f"대조 {rc['reps']}회 중 {rc['done']}회만 판정됨")
     defects = {k: v for k, v in rc["counts"].items() if k in DEFECT}
     pending = {k: v for k, v in rc["counts"].items() if k in PENDING}
     if defects:
@@ -166,6 +175,11 @@ def load_run(run_dir: Path):
     for rate_dir in sorted(run_dir.glob("rate-*"), key=lambda p: int(p.name.split("-")[1])):
         found = sorted(rate_dir.glob("rep-*"))
         reps = [r for r in (load_rep(d) for d in found) if r]
+        # **대조는 성능과 따로 접는다.** load_rep 은 k6 가 비정상 종료한 반복을 빼는데
+        # (그 반복의 분위수는 못 믿는다), reconcile.sh 는 그 반복도 돌아 보고서를
+        # 남긴다. 성능 표본에서 뺐다고 그 반복의 유실까지 빼면, 죽은 회차의 결함이
+        # 요약에서 통째로 사라진다 — 정작 그때가 유실이 가장 잘 나는 자리다.
+        all_reconcile = [{"reconcile": latest_report(d)} for d in found]
         if reps:
             g = summarize_group(reps)
             g["excluded"] = len(found) - len(reps)
@@ -176,14 +190,14 @@ def load_run(run_dir: Path):
                  "configured_rps": None, "configured_requests": None,
                  "over_issued_any": False, "dup_members_max": 0,
                  "ping_avg_ms": None, "ping_stddev_max": None,
-                 # 반복이 전부 깨졌으면 대조도 볼 것이 없다. None 은 "칸이 없다" 는
-                 # 뜻이고, 위의 "대조 안 함" 과 다르다 — 그쪽은 회차는 돌았다는 말이다.
                  "reconcile": None}
             for k in TREND_KEYS:
                 g[k] = None
                 g[k + "_all"] = []
         else:
             continue
+        # 유효 반복이 0개인 그룹에도 대조는 있을 수 있다. 오히려 그쪽이 더 중요하다.
+        g["reconcile"] = fold_reconcile(all_reconcile)
         groups[rate_dir.name] = g
     return groups
 
