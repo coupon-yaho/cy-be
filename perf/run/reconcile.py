@@ -507,8 +507,14 @@ def print_report(report):
     #    **신청**이지 보낸 횟수가 아니다.
     unrecorded = (t["configured_requests"] - t["recorded_applications"]
                   - t["dropped_iterations"])
-    if unrecorded:
+    # **부호를 갈라 읽는다.** 모자란 것과 남는 것은 정반대의 사실이다.
+    # 남는 쪽은 재전송이 새 키를 쓴 경우에 난다 — 그때 "보낸 기록이 없다" 고 적으면
+    # 문구가 사실과 거꾸로다(기록은 오히려 더 많다). 실측으로 -1 을 봤다.
+    if unrecorded > 0:
         print(f"  ⚠️ 설명 안 되는 {unrecorded}건 — 보낸 기록도 없고 못 쐈다는 기록도 없다")
+    elif unrecorded < 0:
+        print(f"  ⚠️ 설정보다 신청이 {-unrecorded}건 많다 —"
+              " 재전송이 새 접수 키를 썼을 수 있다")
     if t["foreign_lines"] or t["malformed_lines"] or t["other_round_records"]:
         print(f"  ⚠️ 남의 줄 {t['foreign_lines']} · 형식 깨진 줄 {t['malformed_lines']}"
               f" · 다른 회차의 기록 {t['other_round_records']}")

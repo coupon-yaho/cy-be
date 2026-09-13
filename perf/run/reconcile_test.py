@@ -188,7 +188,23 @@ class ReconcileTest(unittest.TestCase):
             [(ISSUANCE, ROUND, MEMBER, "ISSUED")], configured=1)
         self.assertEqual(report["totals"]["recorded_applications"], 1)
         self.assertEqual(report["totals"]["recorded_requests"], 2)
+        # **두 문구가 모두 안 나와야 한다.** 부호만 갈라 놓고 줄 수와 맞대면
+        # "설정보다 신청이 많다" 로 바뀔 뿐 여전히 거짓이다 — 신청은 하나다.
         self.assertNotIn("설명 안 되는", proc.stdout)
+        self.assertNotIn("설정보다 신청이", proc.stdout)
+
+    def test_설정보다_신청이_많으면_거꾸로_적지_않는다(self):
+        # 재전송이 새 키를 쓰면 신청이 설정보다 많아진다. 그때 "보낸 기록이 없다" 고
+        # 적으면 **문구가 사실과 거꾸로다** — 기록은 오히려 더 많다. 실측으로 -1 을 봤다.
+        other = "99999999-8888-4777-8666-555555555555"
+        _, report, proc = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{other}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{other}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            configured=1, measure_attempts=1, measure_retries=1)
+        self.assertIn("설정보다 신청이 1건 많다", proc.stdout)
+        self.assertNotIn("설명 안 되는", proc.stdout)
+        self.assertNotIn("-1건", proc.stdout)
 
     def test_기록도_못쏨도_아닌_요청은_총계로_드러난다(self):
         _, report, proc = self.check(
