@@ -37,6 +37,14 @@ def as_report(when, mark):
             "counts": {}, "unjudged": [], "mark": mark}
 
 
+GRADE = "VIP"          # 요청 내용. 서버가 canonicalRequest 로 해시하는 셋째 값이다
+
+
+def issuance(iid, coupon, member, status, content=GRADE):
+    """발급 한 행. **덤프는 다섯 칸이다** — 내용(issued_grade)이 마지막이다."""
+    return (iid, coupon, member, status, content)
+
+
 def tsv(rows):
     body = "".join("\t".join(str(c) for c in r) + "\n" for r in rows)
     return body + f"#EOF\t{len(rows)}\n"
@@ -54,10 +62,10 @@ def derive_histories(records, issuances):
     by_target = {}
     for line in records:
         parts = line.split("\t")
-        if len(parts) == 5 and parts[0] == "CY960" and parts[1] == "REQ":
+        if len(parts) in (5, 6) and parts[0] == "CY960" and parts[1] == "REQ":
             by_target[(parts[3], parts[4])] = parts[2]
     return [(iid, by_target.get((str(cid), str(mid)), foreign_key(iid)))
-            for iid, cid, mid, _status in issuances]
+            for iid, cid, mid, _status, _content in issuances]
 
 
 def foreign_key(issuance_id):
@@ -126,14 +134,14 @@ class ReconcileTest(unittest.TestCase):
 
     def test_성공_응답과_발급이_맞으면_정상이다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"MATCHED": 1})
         self.assertEqual(code, 0)
 
     def test_명시적_거절은_발급이_없어야_정상이다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-306"])
         self.assertEqual(self.types(report), {"MATCHED_REJECTED": 1})
         self.assertEqual(code, 0)
@@ -142,23 +150,23 @@ class ReconcileTest(unittest.TestCase):
 
     def test_응답을_잃어도_발급이_있으면_해소된다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tUNKNOWN\t{KEY}\t1050"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"RESOLVED_ISSUED": 1})
         self.assertEqual(code, 0)
 
     def test_응답_줄이_아예_없어도_같은_판정이_난다(self):
         # k6 가 중간에 죽으면 REQ 만 남는다. 그것도 결과 불명이다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"RESOLVED_ISSUED": 1})
         self.assertEqual(code, 0)
 
     def test_성공을_받았는데_발급이_없으면_유실이다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"])
         self.assertEqual(self.types(report), {"LOST": 1})
         self.assertEqual(code, 1)
 
@@ -166,7 +174,7 @@ class ReconcileTest(unittest.TestCase):
 
     def test_양쪽에서_동시에_빠지면_미해결로_남는다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])
         self.assertEqual(self.types(report), {"UNRESOLVED": 1})
         self.assertEqual(code, 4)
 
@@ -183,9 +191,9 @@ class ReconcileTest(unittest.TestCase):
         # 재전송만큼 음수가 나온다 — 실제 k6 출력으로 돌려 보다 잡았다(설정 11 ·
         # 줄 16 → "설명 안 되는 -5건").
         _, report, proc = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
-             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")], configured=1)
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")], configured=1)
         self.assertEqual(report["totals"]["recorded_applications"], 1)
         self.assertEqual(report["totals"]["recorded_requests"], 2)
         # **두 문구가 모두 안 나와야 한다.** 부호만 갈라 놓고 줄 수와 맞대면
@@ -198,9 +206,9 @@ class ReconcileTest(unittest.TestCase):
         # 적으면 **문구가 사실과 거꾸로다** — 기록은 오히려 더 많다. 실측으로 -1 을 봤다.
         other = "99999999-8888-4777-8666-555555555555"
         _, report, proc = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
-             f"CY960\tREQ\t{other}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{other}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{other}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{other}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
             configured=1, measure_attempts=1, measure_retries=1)
         self.assertIn("설정보다 신청이 1건 많다", proc.stdout)
         self.assertNotIn("설명 안 되는", proc.stdout)
@@ -208,8 +216,8 @@ class ReconcileTest(unittest.TestCase):
 
     def test_기록도_못쏨도_아닌_요청은_총계로_드러난다(self):
         _, report, proc = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")], configured=5, dropped=2)
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")], configured=5, dropped=2)
         # 설정 5 − 신청 1 − 못 쏨 2 = 2건이 어디에도 없다.
         self.assertIn("설명 안 되는 2건", proc.stdout)
 
@@ -217,8 +225,8 @@ class ReconcileTest(unittest.TestCase):
         # 둘 다 measure() 한 번에 하나씩 는다. 어긋나면 기록이 온전하지 않다는 뜻이고,
         # **그 기록으로 낸 판정은 못 믿는다** — 빠진 키는 애초에 없던 것처럼 보인다.
         code, report, proc = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")], measure_attempts=4)
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")], measure_attempts=4)
         self.assertEqual(report["totals"]["k6_measure_attempts"], 4)
         self.assertEqual(report["completeness"]["records"], "PARTIAL")
         self.assertTrue(any("온전하지 않다" in p for p in report["problems"]),
@@ -230,9 +238,9 @@ class ReconcileTest(unittest.TestCase):
         # 같은 키로 두 번 보낸 회차다. 예전 검사(줄 수 == 시도)는 이걸 "기록이
         # 짧다/길다" 로 오탐했다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
-             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(report["completeness"]["records"], "COMPLETE")
         self.assertEqual(report["totals"]["k6_measure_retries"], 1)
         self.assertEqual(self.types(report), {"MATCHED": 1})
@@ -246,9 +254,9 @@ class ReconcileTest(unittest.TestCase):
         """
         other = "99999999-8888-4777-8666-555555555555"
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
-             f"CY960\tREQ\t{other}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{other}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{other}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{other}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
             measure_attempts=1, measure_retries=1)   # k6 는 한 신청·한 재전송으로 셌다
         self.assertEqual(report["completeness"]["records"], "PARTIAL")
         self.assertTrue(any("같은 키를 안 썼을 수 있다" in p for p in report["problems"]),
@@ -258,8 +266,8 @@ class ReconcileTest(unittest.TestCase):
     def test_재전송_줄이_유실되면_잡는다(self):
         # 키 수는 맞는데 줄이 하나 모자라다. 키 검사로는 못 잡는다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
             measure_attempts=1, measure_retries=1)
         self.assertEqual(report["completeness"]["records"], "PARTIAL")
         self.assertTrue(any("기록이 온전하지 않다" in p for p in report["problems"]),
@@ -271,7 +279,7 @@ class ReconcileTest(unittest.TestCase):
         # 깨진 것은 결과 줄 하나뿐이다. 그대로 두면 성공을 받은 건이 결과 불명이 되어
         # 유실(결함, 종료 1)이 미해결(보류, 종료 4)로 내려간다 — 실측으로 확인했다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}"])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}"])
         self.assertEqual(report["totals"]["malformed_lines"], 1)
         self.assertEqual(report["completeness"]["records"], "PARTIAL")
         self.assertEqual(self.types(report), {})
@@ -281,9 +289,9 @@ class ReconcileTest(unittest.TestCase):
         # 접두사가 없는 줄은 우리 기록이 아니다. 그것까지 막으면 k6 가 낸 아무 줄
         # 하나에 대조가 통째로 멈춘다.
         code, report, _ = self.check(
-            ["k6 가 낸 아무 줄", f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            ["k6 가 낸 아무 줄", f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(report["completeness"]["records"], "COMPLETE")
         self.assertEqual(self.types(report), {"MATCHED": 1})
         self.assertEqual(code, 0)
@@ -292,35 +300,35 @@ class ReconcileTest(unittest.TestCase):
         # 짧은 기록으로 낸 유실 수는 실제보다 작다. 그 수를 내놓으면 보는 사람이
         # 그것을 전부로 읽는다 — 안 세는 편이 낫다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
             measure_attempts=9)
         self.assertEqual(self.types(report), {})
         self.assertEqual(code, 3)
 
     def test_시도와_기록이_맞으면_아무_말도_안_한다(self):
         _, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(report["problems"], [])
 
     # ── 고아 · 중복 ──────────────────────────────────────────────────
 
     def test_보낸_적_없는_발급은_고아다(self):
-        code, report, _ = self.check([], [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+        code, report, _ = self.check([], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"ORPHAN": 1})
         self.assertEqual(code, 1)
 
     def test_다른_회차의_발급은_고아가_아니다(self):
         # 워밍업 회차의 발급까지 고아로 세면 정상 회차가 전량 결함으로 보인다.
-        code, report, _ = self.check([], [(ISSUANCE, ROUND + 1, MEMBER, "ISSUED")])
+        code, report, _ = self.check([], [issuance(ISSUANCE, ROUND + 1, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {})
         self.assertEqual(code, 0)
 
     def test_한_대상에_발급이_둘이면_중복이다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
-             (ISSUANCE + 1, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+             issuance(ISSUANCE + 1, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"DUPLICATE": 1})
         self.assertEqual(code, 1)
 
@@ -330,10 +338,10 @@ class ReconcileTest(unittest.TestCase):
         # 첫 시도는 응답을 잃었고 두 번째는 "이미 있다" 로 거절됐는데 세 번째가 성공했다.
         # 세 줄이지만 신청은 하나고, 결론은 가장 확정적인 것 — 성공이다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050",
-             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tREJECTED\t{KEY}\tCOUPON-305",
-             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tREJECTED\t{KEY}\tCOUPON-305",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"MATCHED": 1})
         self.assertEqual(report["findings"][0]["attempts"], 3)
         self.assertEqual(code, 0)
@@ -341,16 +349,16 @@ class ReconcileTest(unittest.TestCase):
     def test_한_접수_키에_예약번호가_둘이면_불일치다(self):
         # 멱등이 깨졌다는 뜻이다. 재전송이 새 발급을 만들었다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}",
-             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE + 9}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE + 9}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"MISMATCH": 1})
         self.assertEqual(code, 1)
 
     def test_받은_예약번호가_DB_와_다르면_불일치다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE + 5, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE + 5, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"MISMATCH": 1})
         self.assertEqual(code, 1)
 
@@ -360,8 +368,8 @@ class ReconcileTest(unittest.TestCase):
         # **대상으로 조인하면 이것이 MATCHED 로 보인다.** 회원도 회차도 맞으니까.
         # 내 신청이 그 발급이 됐는지는 접수 키만이 답한다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
             histories=[(ISSUANCE, foreign_key(ISSUANCE))])
         self.assertEqual(self.types(report), {"KEY_MISMATCH": 1, "ORPHAN": 1})
         self.assertEqual(code, 1)
@@ -371,8 +379,8 @@ class ReconcileTest(unittest.TestCase):
         # 대상은 언제나 맞다. 예전에는 한 건의 대상 오류가 유실 하나와 고아 하나로
         # 흩어졌고, 둘을 이으려면 사람이 손으로 맞춰야 했다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER + 7, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER + 7, "ISSUED")],
             histories=[(ISSUANCE, KEY)])
         self.assertEqual(self.types(report), {"TARGET_MISMATCH": 1})
         self.assertEqual(report["findings"][0]["key"], KEY)
@@ -383,19 +391,86 @@ class ReconcileTest(unittest.TestCase):
         # 덤프를 대상 회차로만 뜨면 이 행이 아예 없어 LOST 로 읽힌다 — 결함은 잡되
         # 이름이 틀린다. reconcile.sh 가 성공 응답의 예약번호로 회차 밖을 짚는다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND + 5, MEMBER, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND + 5, MEMBER, "ISSUED")],
             histories=[(ISSUANCE, KEY)])
         self.assertEqual(self.types(report), {"TARGET_MISMATCH": 1})
         self.assertIn(f"회차 {ROUND + 5}", report["findings"][0]["detail"])
         self.assertEqual(code, 1)
 
+    # ── 요청 내용 축 (CY-970) ────────────────────────────────────────
+
+    def test_대상은_맞는데_내용이_다르면_잡는다(self):
+        """요구사항 §6.3 이 *"접수 키·대상·내용"* 을 셋으로 적는 이유다.
+
+        서버가 보는 요청 내용은 `canonicalRequest` 의 셋이고 그 셋째가 여기 담긴다.
+        대상만 맞대면 **엉뚱한 내용으로 발급된 건이 일치로 읽힌다.**
+        """
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+             f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED", content="BASIC")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"CONTENT_MISMATCH": 1})
+        self.assertIn("BASIC", report["findings"][0]["detail"])
+        self.assertEqual(code, 1)
+
+    def test_내용이_같으면_일치다(self):
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+             f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"MATCHED": 1})
+        self.assertEqual(code, 0)
+
+    def test_내용을_안_담은_옛_기록은_그_축을_판정하지_않는다(self):
+        # **거절하지 않는다** — 옛 회차를 다시 대조하는 것이 이 도구의 쓰임새다.
+        # 대신 없는 값을 "맞다" 로 세지도 않는다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",          # 5칸 = 옛 형식
+             f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED", content="BASIC")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(report["completeness"]["content"], "MISSING")
+        self.assertIn("CONTENT_MISMATCH", report["unjudged"])
+        self.assertEqual(report["totals"]["malformed_lines"], 0)   # 형식 깨짐이 아니다
+        self.assertEqual(self.types(report), {"MATCHED": 1})
+        self.assertEqual(code, 3)                                   # 일부 판정 불가
+
+    def test_한_키에_내용이_둘이면_불일치다(self):
+        # 같은 키로 다른 내용을 보낸 것이다 — 서버는 COUPON-404 로 거절한다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+             f"CY960\tUNKNOWN\t{KEY}\t1050",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\tBASIC",
+             f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"CONTENT_MISMATCH": 1})
+        self.assertEqual(code, 1)
+
+    def test_내용_불일치는_예약번호_불일치와_다른_유형이다(self):
+        # 원인이 다르다 — 이쪽은 요청↔저장, 저쪽은 응답↔저장이다.
+        _, content_bad, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+             f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED", content="BASIC")],
+            histories=[(ISSUANCE, KEY)])
+        _, id_bad, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+             f"CY960\tOK\t{KEY}\t{ISSUANCE + 5}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(content_bad), {"CONTENT_MISMATCH": 1})
+        self.assertEqual(self.types(id_bad), {"MISMATCH": 1})
+
     def test_한_접수_키가_발급_둘을_만들면_멱등이_깨진_것이다(self):
         # 대상이 서로 달라도 잡힌다 — 한 신청이 두 발급을 만든 것이 결함이다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
-             (ISSUANCE + 1, ROUND, MEMBER + 3, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+             issuance(ISSUANCE + 1, ROUND, MEMBER + 3, "ISSUED")],
             histories=[(ISSUANCE, KEY), (ISSUANCE + 1, KEY)])
         self.assertEqual(self.types(report), {"DUPLICATE": 1})
         self.assertIn("멱등이 깨졌다", report["findings"][0]["detail"])
@@ -405,9 +480,9 @@ class ReconcileTest(unittest.TestCase):
         # 같은 키가 만든 두 발급이 같은 대상에 있으면 DUPLICATE 하나로 족하다.
         # DUPLICATE_TARGET 까지 내면 한 상황이 결함 둘로 읽힌다.
         _, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
-             (ISSUANCE + 1, ROUND, MEMBER, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+             issuance(ISSUANCE + 1, ROUND, MEMBER, "ISSUED")],
             histories=[(ISSUANCE, KEY), (ISSUANCE + 1, KEY)])
         self.assertEqual(self.types(report), {"DUPLICATE": 1})
 
@@ -415,9 +490,9 @@ class ReconcileTest(unittest.TestCase):
         # 이쪽은 uk_coupon_member 가 깨진 것이라 DUPLICATE 와 다른 사실이다.
         other = foreign_key(ISSUANCE + 1)
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
-             (ISSUANCE + 1, ROUND, MEMBER, "ISSUED")],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+             issuance(ISSUANCE + 1, ROUND, MEMBER, "ISSUED")],
             histories=[(ISSUANCE, KEY), (ISSUANCE + 1, other)])
         self.assertEqual(self.types(report),
                          {"MATCHED": 1, "DUPLICATE_TARGET": 1, "ORPHAN": 1})
@@ -427,14 +502,14 @@ class ReconcileTest(unittest.TestCase):
         # 시드 더미가 이렇게 생겼다 — issuances 에만 INSERT 하고 이력은 안 만든다.
         # 대상 회차 안에서 나오면 그 자체가 검출이다.
         code, report, _ = self.check(
-            [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")], histories=[])
+            [], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")], histories=[])
         self.assertEqual(self.types(report), {"UNATTRIBUTABLE": 1})
         self.assertIn("ISSUE 이력이 없다", report["findings"][0]["detail"])
         self.assertEqual(code, 1)
 
     def test_이력의_키가_갈리는_발급도_못_붙인다(self):
         code, report, _ = self.check(
-            [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            [], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
             histories=[(ISSUANCE, KEY), (ISSUANCE, foreign_key(ISSUANCE))])
         self.assertEqual(self.types(report), {"UNATTRIBUTABLE": 1})
         self.assertIn("2가지다", report["findings"][0]["detail"])
@@ -447,9 +522,9 @@ class ReconcileTest(unittest.TestCase):
                       "ffffffff-ffff-4fff-8fff-ffffffffffff"):
             with self.subTest(other=other):
                 code, report, _ = self.check(
-                    [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                    [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
                      f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-                    [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+                    [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
                     histories=[(ISSUANCE, KEY), (ISSUANCE, other)])
                 self.assertEqual(self.types(report),
                                  {"KEY_MISMATCH": 1, "UNATTRIBUTABLE": 1})
@@ -457,8 +532,8 @@ class ReconcileTest(unittest.TestCase):
 
     def test_이력_조회가_실패하면_키로_가르는_판정을_안_한다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")], write_histories=False)
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")], write_histories=False)
         self.assertEqual(report["completeness"]["histories"], "PARTIAL")
         self.assertIn("KEY_MISMATCH", report["unjudged"])
         self.assertIn("ORPHAN", report["unjudged"])
@@ -469,8 +544,8 @@ class ReconcileTest(unittest.TestCase):
         # 대상으로 이름 붙이면 같은 대상의 두 고아가 전후 비교에서 한 원소로 뭉개진다.
         a, b = foreign_key(ISSUANCE), foreign_key(ISSUANCE + 1)
         _, report, _ = self.check(
-            [], [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
-                 (ISSUANCE + 1, ROUND, MEMBER + 1, "ISSUED")],
+            [], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+                 issuance(ISSUANCE + 1, ROUND, MEMBER + 1, "ISSUED")],
             histories=[(ISSUANCE, a), (ISSUANCE + 1, b)])
         self.assertEqual(sorted(f["key"] for f in report["findings"]), sorted([a, b]))
 
@@ -478,9 +553,9 @@ class ReconcileTest(unittest.TestCase):
 
     def test_안_받았다고_해_놓고_발급이_있으면_거짓_거절이다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-306"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"FALSE_REJECT": 1})
         self.assertEqual(code, 1)
 
@@ -490,9 +565,9 @@ class ReconcileTest(unittest.TestCase):
         # 이 정상을 결함으로 읽는다 — 축이 둘이어야 하는 이유가 여기 있다.
         other = foreign_key(ISSUANCE)
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-305"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
             histories=[(ISSUANCE, other)])
         self.assertEqual(self.types(report),
                          {"ALREADY_ISSUED_CONFIRMED": 1, "ORPHAN": 1})
@@ -505,15 +580,15 @@ class ReconcileTest(unittest.TestCase):
         # 서버가 내 요청으로 발급을 만들어 놓고 409 로 답한 꼴이다. 대상만 보면
         # "이미 있으니 정상" 으로 보이는데, 키를 보면 그 발급이 **내 것**이다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-305"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"FALSE_REJECT": 1})
         self.assertEqual(code, 1)
 
     def test_이미_있다고_해_놓고_발급이_없으면_결함이다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-305"])
         self.assertEqual(self.types(report), {"ALREADY_ISSUED_PHANTOM": 1})
         self.assertEqual(code, 1)
@@ -522,11 +597,11 @@ class ReconcileTest(unittest.TestCase):
         # 재시도가 매진으로 한 번 튕기고 다음에 "이미 있다" 를 받았다. 뒤쪽만이
         # 발급이 있다는 증언이라, 앞쪽을 집으면 멀쩡한 발급이 거짓 거절로 잡힌다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-306",
-             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-305"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
             histories=[(ISSUANCE, foreign_key(ISSUANCE))])
         self.assertEqual(self.types(report),
                          {"ALREADY_ISSUED_CONFIRMED": 1, "ORPHAN": 1})
@@ -538,15 +613,15 @@ class ReconcileTest(unittest.TestCase):
         # 201 인데 본문에 issuanceId 가 없거나 파싱이 깨졌다. 대상이 맞으니 발급은
         # 있지만 **무엇을 받았는지 확인이 안 된다** — 정상으로 세면 그것이 사라진다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"MISMATCH": 1})
         self.assertIn("예약번호를 못 읽었다", report["findings"][0]["detail"])
         self.assertEqual(code, 1)
 
     def test_예약번호를_못_읽었고_발급도_없으면_유실이다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t"])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t"])
         self.assertEqual(self.types(report), {"LOST": 1})
         self.assertIn("예약번호 없음", report["findings"][0]["detail"])
         self.assertEqual(code, 1)
@@ -557,7 +632,7 @@ class ReconcileTest(unittest.TestCase):
         # 처리 서버가 접수 키를 잡고 죽었다. ck_idempotency_status_targets 가
         # IN_PROGRESS 행의 회원·발급을 NULL 로 못박으므로 그 두 칸은 비어 있다.
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tUNKNOWN\t{KEY}\t1050"],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tUNKNOWN\t{KEY}\t1050"],
             idem=[(KEY, "IN_PROGRESS", "", "")])
         self.assertEqual(self.types(report), {"INCOMPLETE": 1})
         self.assertEqual(code, 4)
@@ -572,8 +647,8 @@ class ReconcileTest(unittest.TestCase):
 
     def test_받은_뒤_취소된_발급은_유실이_아니다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "CANCELLED")])
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "CANCELLED")])
         self.assertEqual(self.types(report), {"MATCHED_STATUS_CHANGED": 1})
         self.assertEqual(report["findings"][0]["detail"], f"발급 {ISSUANCE} 이 CANCELLED 다")
         self.assertEqual(code, 0)
@@ -582,7 +657,7 @@ class ReconcileTest(unittest.TestCase):
 
     def test_멱등_조회가_실패해도_발급_쪽_판정은_살아_있다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
             write_idem=False)
         self.assertEqual(self.types(report), {"LOST": 1})
         self.assertEqual(report["completeness"]["idempotency"], "PARTIAL")
@@ -593,7 +668,7 @@ class ReconcileTest(unittest.TestCase):
 
     def test_발급_조회가_실패하면_유실로_세지_않는다(self):
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
             write_issuances=False)
         self.assertEqual(self.types(report), {})
         self.assertEqual(code, 3)
@@ -603,7 +678,7 @@ class ReconcileTest(unittest.TestCase):
         # 중간에 끊긴 회차가 **전량 유실**로 보인다.
         with tempfile.TemporaryDirectory() as tmp:
             f = Fixture(tmp,
-                        [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                        [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
                          f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
                         write_issuances=False)
             (f.dir / "db-issuances.tsv").write_text(
@@ -626,9 +701,9 @@ class ReconcileTest(unittest.TestCase):
 
     def test_남의_줄이_섞여도_판정은_안_바뀐다(self):
         code, report, _ = self.check(
-            ["k6 가 낸 아무 줄", f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+            ["k6 가 낸 아무 줄", f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tOK\t{KEY}\t{ISSUANCE}", "또 한 줄"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"MATCHED": 1})
         self.assertEqual(report["totals"]["foreign_lines"], 2)
         self.assertEqual(code, 0)
@@ -641,7 +716,7 @@ class ReconcileTest(unittest.TestCase):
 
     def test_기록_파일이_없으면_아무것도_판정하지_않는다(self):
         with tempfile.TemporaryDirectory() as tmp:
-            f = Fixture(tmp, [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            f = Fixture(tmp, [], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
             (f.dir / "requests.log").unlink()
             code, report, _ = f.run()
         self.assertEqual(report["completeness"]["records"], "MISSING")
@@ -653,14 +728,14 @@ class ReconcileTest(unittest.TestCase):
         # 읽으면 회차의 발급이 **전부 고아**로 보고된다 — 멀쩡한 회차에서 만 건짜리
         # 거짓 결함이 난다. 표식이 없으면 판정하지 않는 이유가 이것이다.
         code, report, _ = self.check(
-            [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")], marker=False)
+            [], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")], marker=False)
         self.assertEqual(self.types(report), {})
         self.assertEqual(report["completeness"]["records"], "MISSING")
         self.assertEqual(code, 3)
 
     def test_다른_회차의_표식만_있으면_판정하지_않는다(self):
         with tempfile.TemporaryDirectory() as tmp:
-            f = Fixture(tmp, [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")], marker=False)
+            f = Fixture(tmp, [], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")], marker=False)
             (f.dir / "requests.log").write_text(f"CY960\tRUN\t{ROUND + 1}\n")
             code, report, _ = f.run()
         self.assertEqual(self.types(report), {})
@@ -671,11 +746,11 @@ class ReconcileTest(unittest.TestCase):
         # DB 에 없으니, 안 거르면 전부 미해결로 보인다.
         old_key = "99999999-8888-4777-8666-555555555555"
         code, report, _ = self.check(
-            [f"CY960\tREQ\t{old_key}\t{ROUND - 1}\t{MEMBER}",
+            [f"CY960\tREQ\t{old_key}\t{ROUND - 1}\t{MEMBER}\t{GRADE}",
              f"CY960\tOK\t{old_key}\t{ISSUANCE - 1}",
-             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
              f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
         self.assertEqual(self.types(report), {"MATCHED": 1})
         self.assertEqual(report["totals"]["other_round_records"], 1)
         self.assertEqual(code, 0)
@@ -694,10 +769,10 @@ class ReconcileTest(unittest.TestCase):
         return proc.returncode, proc
 
     def test_반복을_여럿_주면_전부_돈다(self):
-        ok = [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"]
+        ok = [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"]
         with tempfile.TemporaryDirectory() as tmp:
-            a = self._rep(tmp, "rep-1", ok, [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
-            b = self._rep(tmp, "rep-2", ok, [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            a = self._rep(tmp, "rep-1", ok, [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+            b = self._rep(tmp, "rep-2", ok, [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
             code, proc = self.batch(a, b)
             written = [len(list(d.glob("reconcile-*.json"))) for d in (a, b)]
         self.assertEqual(written, [1, 1])          # 반복마다 자기 보고서가 남는다
@@ -708,12 +783,12 @@ class ReconcileTest(unittest.TestCase):
         # 첫 반복에서 멈추면 나머지를 못 본다. 결함 반복을 **앞에** 둔다.
         with tempfile.TemporaryDirectory() as tmp:
             bad = self._rep(tmp, "rep-1",
-                            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
                              f"CY960\tOK\t{KEY}\t{ISSUANCE}"])           # 발급 없음 → LOST
             good = self._rep(tmp, "rep-2",
-                             [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                             [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
                               f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
-                             [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+                             [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
             code, proc = self.batch(bad, good)
             after = len(list(good.glob("reconcile-*.json")))
         self.assertEqual(after, 1, "뒤 반복이 판정되지 않았다")
@@ -731,9 +806,9 @@ class ReconcileTest(unittest.TestCase):
     def test_보류와_결함이_섞이면_결함이_이긴다(self):
         with tempfile.TemporaryDirectory() as tmp:
             pending = self._rep(tmp, "rep-1",
-                                [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])  # UNRESOLVED
+                                [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])  # UNRESOLVED
             defect = self._rep(tmp, "rep-2",
-                               [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                               [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
                                 f"CY960\tOK\t{KEY}\t{ISSUANCE}"])            # LOST
             code, proc = self.batch(pending, defect)
         self.assertIn("결함 1", proc.stdout)
@@ -743,8 +818,8 @@ class ReconcileTest(unittest.TestCase):
     def test_묶음에는_out_을_못_쓴다(self):
         # 반복마다 자기 보고서가 남아야 한다. 한 경로로 몰면 서로 덮어쓴다.
         with tempfile.TemporaryDirectory() as tmp:
-            a = self._rep(tmp, "rep-1", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
-            b = self._rep(tmp, "rep-2", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            a = self._rep(tmp, "rep-1", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])
+            b = self._rep(tmp, "rep-2", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])
             proc = subprocess.run(
                 [sys.executable, str(CLI), str(a), str(b), "--out", f"{tmp}/x.json"],
                 capture_output=True, text=True)
@@ -857,7 +932,7 @@ class ReconcileTest(unittest.TestCase):
     def test_진짜_대조가_낸_보고서는_모양_검사를_통과한다(self):
         # 손으로 만든 픽스처만 통과하면 검사가 실물과 어긋난 것이다.
         with tempfile.TemporaryDirectory() as tmp:
-            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])
             subprocess.run([sys.executable, str(CLI), str(f.dir)],
                            capture_output=True, text=True)
             got = reconcile_mod.latest_report(f.dir)
@@ -883,7 +958,7 @@ class ReconcileTest(unittest.TestCase):
         # 위 시험들은 이름을 손으로 만들었다. **진짜 대조가 낸 파일**로도 도는지 본다 —
         # 이름 규칙이 바뀌면 손으로 만든 픽스처만 통과하는 상태가 된다.
         with tempfile.TemporaryDirectory() as tmp:
-            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])
             for _ in range(2):
                 subprocess.run([sys.executable, str(CLI), str(f.dir)],
                                capture_output=True, text=True)
@@ -911,12 +986,12 @@ class ReconcileTest(unittest.TestCase):
         return d / "report.json"
 
     def test_다시_대조해서_해소되면_해소로_나온다(self):
-        records = [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+        records = [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
                    f"CY960\tUNKNOWN\t{KEY}\t1050"]
         with tempfile.TemporaryDirectory() as tmp:
             before = self._report(tmp, "before", records)
             after = self._report(tmp, "after", records,
-                                 [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+                                 [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")])
             proc = subprocess.run(
                 [sys.executable, str(CLI), "--diff", str(before), str(after)],
                 capture_output=True, text=True)
@@ -929,11 +1004,11 @@ class ReconcileTest(unittest.TestCase):
         # 집합에서 한 원소로 뭉개져, 해소된 고아와 새로 생긴 고아가 안 보인다.
         with tempfile.TemporaryDirectory() as tmp:
             before = self._report(tmp, "before", [],
-                                  [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
-                                   (ISSUANCE + 1, ROUND, MEMBER + 1, "ISSUED")])
+                                  [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+                                   issuance(ISSUANCE + 1, ROUND, MEMBER + 1, "ISSUED")])
             after = self._report(tmp, "after", [],
-                                 [(ISSUANCE + 1, ROUND, MEMBER + 1, "ISSUED"),
-                                  (ISSUANCE + 2, ROUND, MEMBER + 2, "ISSUED")])
+                                 [issuance(ISSUANCE + 1, ROUND, MEMBER + 1, "ISSUED"),
+                                  issuance(ISSUANCE + 2, ROUND, MEMBER + 2, "ISSUED")])
             proc = subprocess.run(
                 [sys.executable, str(CLI), "--diff", str(before), str(after)],
                 capture_output=True, text=True)
@@ -946,10 +1021,10 @@ class ReconcileTest(unittest.TestCase):
         # 생긴 것처럼 보인다.
         with tempfile.TemporaryDirectory() as tmp:
             b = Path(tmp) / "before"; b.mkdir()
-            Fixture(b, [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            Fixture(b, [], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
                     write_histories=False).run()
             a = Path(tmp) / "after"; a.mkdir()
-            Fixture(a, [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")]).run()
+            Fixture(a, [], [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")]).run()
             proc = subprocess.run(
                 [sys.executable, str(CLI), "--diff",
                  str(b / "report.json"), str(a / "report.json")],
@@ -961,8 +1036,8 @@ class ReconcileTest(unittest.TestCase):
 
     def test_회차가_다르면_키_단위로_비교하지_않는다(self):
         with tempfile.TemporaryDirectory() as tmp:
-            a = self._report(tmp, "a", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
-            b = self._report(tmp, "b", [f"CY960\tREQ\t{KEY}\t{ROUND + 1}\t{MEMBER}"],
+            a = self._report(tmp, "a", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])
+            b = self._report(tmp, "b", [f"CY960\tREQ\t{KEY}\t{ROUND + 1}\t{MEMBER}\t{GRADE}"],
                              round_id=ROUND + 1)
             proc = subprocess.run(
                 [sys.executable, str(CLI), "--diff", str(a), str(b)],
@@ -974,7 +1049,7 @@ class ReconcileTest(unittest.TestCase):
 
     def test_대조_결과는_실행마다_다른_파일로_남는다(self):
         with tempfile.TemporaryDirectory() as tmp:
-            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}"])
             for _ in range(2):
                 subprocess.run([sys.executable, str(CLI), str(f.dir)],
                                capture_output=True, text=True)

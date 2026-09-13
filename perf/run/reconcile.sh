@@ -83,8 +83,10 @@ for REP in "${REPS[@]}"; do
   fi
 
   log "대상 회차 $ROUND 의 발급을 읽는다"
+  # issued_grade 도 뜬다 — 서버가 보는 **요청 내용**의 한 칸이고
+  # (canonicalRequest 가 해시하는 셋 중 하나), 독립 기록과 맞대야 한다.
   dump db-issuances.tsv "
-    SELECT i.id, i.coupon_id, i.member_id, i.status
+    SELECT i.id, i.coupon_id, i.member_id, i.status, i.issued_grade
     FROM issuances i WHERE i.coupon_id = $ROUND$ID_CLAUSE ORDER BY i.id;"
 
   # 발급마다 접수 키가 하나 붙어 있다. **이것이 조인 축이다.**
