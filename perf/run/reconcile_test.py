@@ -31,13 +31,36 @@ def tsv(rows):
     return body + f"#EOF\t{len(rows)}\n"
 
 
+def derive_histories(records, issuances):
+    """발급마다 ISSUE 이력 한 줄. **기본값이 런타임에 가능한 형상이어야 한다.**
+
+    실제로 한 발급은 어떤 접수 키의 요청이 만든 것이다. 그 대상으로 보낸 REQ 가 있으면
+    그 키가 만든 것으로 보고, 없으면 우리가 모르는 키가 만든 것으로 본다 — 그것이
+    고아의 실제 모습이다. 키 없는 발급을 기본값으로 두면 런타임에 없는 형상이 된다.
+
+    다른 키가 만든 발급을 시험하려면 `histories=` 로 직접 준다.
+    """
+    by_target = {}
+    for line in records:
+        parts = line.split("\t")
+        if len(parts) == 5 and parts[0] == "CY960" and parts[1] == "REQ":
+            by_target[(parts[3], parts[4])] = parts[2]
+    return [(iid, by_target.get((str(cid), str(mid)), foreign_key(iid)))
+            for iid, cid, mid, _status in issuances]
+
+
+def foreign_key(issuance_id):
+    """우리가 보낸 적 없는 접수 키. UUID 모양이어야 런타임에 가능한 값이다."""
+    return f"00000000-0000-4000-8000-{issuance_id:012d}"
+
+
 class Fixture:
     """한 반복 디렉터리를 만든다. 안 준 파일은 안 만든다 — 그것이 조회 실패의 형상이다."""
 
     def __init__(self, tmp, records, issuances=(), idem=(), *,
                  configured=1, dropped=0, round_id=ROUND,
                  write_issuances=True, write_idem=True, marker=True,
-                 measure_attempts=None):
+                 measure_attempts=None, histories=None, write_histories=True):
         self.dir = Path(tmp)
         (self.dir / "round.json").write_text(json.dumps({
             "engine": "V2", "target_round_id": round_id,
@@ -58,6 +81,10 @@ class Fixture:
             (self.dir / "db-issuances.tsv").write_text(tsv(issuances))
         if write_idem:
             (self.dir / "db-idempotency.tsv").write_text(tsv(idem))
+        if write_histories:
+            (self.dir / "db-histories.tsv").write_text(
+                tsv(derive_histories(records, issuances)
+                    if histories is None else histories))
 
     def run(self):
         out = self.dir / "report.json"
@@ -207,6 +234,115 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.types(report), {"MISMATCH": 1})
         self.assertEqual(code, 1)
 
+    # ── 접수 키를 축으로 삼아야만 보이는 것 (CY-962) ─────────────────
+
+    def test_대상은_맞는데_내_키의_발급이_아니면_잡는다(self):
+        # **대상으로 조인하면 이것이 MATCHED 로 보인다.** 회원도 회차도 맞으니까.
+        # 내 신청이 그 발급이 됐는지는 접수 키만이 답한다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, foreign_key(ISSUANCE))])
+        self.assertEqual(self.types(report), {"KEY_MISMATCH": 1, "ORPHAN": 1})
+        self.assertEqual(code, 1)
+
+    def test_내_키의_발급이_다른_대상_앞으로_있으면_잡는다(self):
+        # **대상으로 조인하면 낼 수 없는 판정이다** — 대상으로 찾았으니 찾힌 행의
+        # 대상은 언제나 맞다. 예전에는 한 건의 대상 오류가 유실 하나와 고아 하나로
+        # 흩어졌고, 둘을 이으려면 사람이 손으로 맞춰야 했다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER + 7, "ISSUED")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"TARGET_MISMATCH": 1})
+        self.assertEqual(report["findings"][0]["key"], KEY)
+        self.assertIn(f"회원 {MEMBER + 7}", report["findings"][0]["detail"])
+        self.assertEqual(code, 1)
+
+    def test_한_접수_키가_발급_둘을_만들면_멱등이_깨진_것이다(self):
+        # 대상이 서로 달라도 잡힌다 — 한 신청이 두 발급을 만든 것이 결함이다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+             (ISSUANCE + 1, ROUND, MEMBER + 3, "ISSUED")],
+            histories=[(ISSUANCE, KEY), (ISSUANCE + 1, KEY)])
+        self.assertEqual(self.types(report), {"DUPLICATE": 1})
+        self.assertIn("멱등이 깨졌다", report["findings"][0]["detail"])
+        self.assertEqual(code, 1)
+
+    def test_한_대상의_중복을_두_번_세지_않는다(self):
+        # 같은 키가 만든 두 발급이 같은 대상에 있으면 DUPLICATE 하나로 족하다.
+        # DUPLICATE_TARGET 까지 내면 한 상황이 결함 둘로 읽힌다.
+        _, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+             (ISSUANCE + 1, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, KEY), (ISSUANCE + 1, KEY)])
+        self.assertEqual(self.types(report), {"DUPLICATE": 1})
+
+    def test_서로_다른_키가_한_대상에_발급을_만들면_그건_따로_센다(self):
+        # 이쪽은 uk_coupon_member 가 깨진 것이라 DUPLICATE 와 다른 사실이다.
+        other = foreign_key(ISSUANCE + 1)
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+             (ISSUANCE + 1, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, KEY), (ISSUANCE + 1, other)])
+        self.assertEqual(self.types(report),
+                         {"MATCHED": 1, "DUPLICATE_TARGET": 1, "ORPHAN": 1})
+        self.assertEqual(code, 1)
+
+    def test_이력이_없는_발급은_어느_키에도_못_붙인다(self):
+        # 시드 더미가 이렇게 생겼다 — issuances 에만 INSERT 하고 이력은 안 만든다.
+        # 대상 회차 안에서 나오면 그 자체가 검출이다.
+        code, report, _ = self.check(
+            [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")], histories=[])
+        self.assertEqual(self.types(report), {"UNATTRIBUTABLE": 1})
+        self.assertIn("ISSUE 이력이 없다", report["findings"][0]["detail"])
+        self.assertEqual(code, 1)
+
+    def test_이력의_키가_갈리는_발급도_못_붙인다(self):
+        code, report, _ = self.check(
+            [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, KEY), (ISSUANCE, foreign_key(ISSUANCE))])
+        self.assertEqual(self.types(report), {"UNATTRIBUTABLE": 1})
+        self.assertIn("2가지다", report["findings"][0]["detail"])
+
+    def test_키가_갈리는_이력은_어느_키에도_붙지_않는다(self):
+        # 둘 중 하나를 골라 쓰면 그 발급이 누군가의 신청으로 **잘못 귀속된다.**
+        # 고르는 규칙이 무엇이든(먼저·나중·작은 값) 틀리므로, 내 키가 앞서는 경우와
+        # 뒤서는 경우를 **둘 다** 태운다 — 한쪽만 태우면 반대 규칙이 살아남는다.
+        for other in ("00000000-0000-4000-8000-000000000001",
+                      "ffffffff-ffff-4fff-8fff-ffffffffffff"):
+            with self.subTest(other=other):
+                code, report, _ = self.check(
+                    [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+                     f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+                    [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+                    histories=[(ISSUANCE, KEY), (ISSUANCE, other)])
+                self.assertEqual(self.types(report),
+                                 {"KEY_MISMATCH": 1, "UNATTRIBUTABLE": 1})
+                self.assertEqual(code, 1)
+
+    def test_이력_조회가_실패하면_키로_가르는_판정을_안_한다(self):
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")], write_histories=False)
+        self.assertEqual(report["completeness"]["histories"], "PARTIAL")
+        self.assertIn("KEY_MISMATCH", report["unjudged"])
+        self.assertIn("ORPHAN", report["unjudged"])
+        self.assertEqual(self.types(report), {})
+        self.assertEqual(code, 3)
+
+    def test_고아의_이름은_그_발급이_단_접수_키다(self):
+        # 대상으로 이름 붙이면 같은 대상의 두 고아가 전후 비교에서 한 원소로 뭉개진다.
+        a, b = foreign_key(ISSUANCE), foreign_key(ISSUANCE + 1)
+        _, report, _ = self.check(
+            [], [(ISSUANCE, ROUND, MEMBER, "ISSUED"),
+                 (ISSUANCE + 1, ROUND, MEMBER + 1, "ISSUED")],
+            histories=[(ISSUANCE, a), (ISSUANCE + 1, b)])
+        self.assertEqual(sorted(f["key"] for f in report["findings"]), sorted([a, b]))
+
     # ── 거절의 두 얼굴 ───────────────────────────────────────────────
 
     def test_안_받았다고_해_놓고_발급이_있으면_거짓_거절이다(self):
@@ -218,12 +354,31 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(code, 1)
 
     def test_이미_있다는_거절은_발급이_있는_것이_정상이다(self):
+        # **이 거절은 대상에 대한 주장이다.** 그 발급은 더 앞선 **다른 접수 키**가
+        # 만든 것이라 내 키로 찾으면 안 나오는 것이 정상이다. 키로만 조인하면
+        # 이 정상을 결함으로 읽는다 — 축이 둘이어야 하는 이유가 여기 있다.
+        other = foreign_key(ISSUANCE)
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+             f"CY960\tREJECTED\t{KEY}\tCOUPON-305"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, other)])
+        self.assertEqual(self.types(report),
+                         {"ALREADY_ISSUED_CONFIRMED": 1, "ORPHAN": 1})
+        # 그 발급 자체는 우리가 보낸 적 없는 키를 달고 있으니 고아로 한 번 보고된다.
+        self.assertEqual(
+            [f["key"] for f in report["findings"] if f["type"] == "ORPHAN"], [other])
+        self.assertEqual(code, 1)
+
+    def test_이미_있다는_거절인데_내_키의_발급이면_거짓_거절이다(self):
+        # 서버가 내 요청으로 발급을 만들어 놓고 409 로 답한 꼴이다. 대상만 보면
+        # "이미 있으니 정상" 으로 보이는데, 키를 보면 그 발급이 **내 것**이다.
         code, report, _ = self.check(
             [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-305"],
             [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
-        self.assertEqual(self.types(report), {"ALREADY_ISSUED_CONFIRMED": 1})
-        self.assertEqual(code, 0)
+        self.assertEqual(self.types(report), {"FALSE_REJECT": 1})
+        self.assertEqual(code, 1)
 
     def test_이미_있다고_해_놓고_발급이_없으면_결함이다(self):
         code, report, _ = self.check(
@@ -240,9 +395,13 @@ class ReconcileTest(unittest.TestCase):
              f"CY960\tREJECTED\t{KEY}\tCOUPON-306",
              f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
              f"CY960\tREJECTED\t{KEY}\tCOUPON-305"],
-            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
-        self.assertEqual(self.types(report), {"ALREADY_ISSUED_CONFIRMED": 1})
-        self.assertEqual(code, 0)
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, foreign_key(ISSUANCE))])
+        self.assertEqual(self.types(report),
+                         {"ALREADY_ISSUED_CONFIRMED": 1, "ORPHAN": 1})
+        self.assertEqual(
+            [f["type"] for f in report["findings"] if f["key"] == KEY],
+            ["ALREADY_ISSUED_CONFIRMED"])
 
     def test_성공인데_예약번호를_못_읽으면_불일치다(self):
         # 201 인데 본문에 issuanceId 가 없거나 파싱이 깨졌다. 대상이 맞으니 발급은
