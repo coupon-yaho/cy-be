@@ -578,6 +578,23 @@ def report_paths(rep: Path):
     return [r[2] for r in sorted(rows, key=lambda r: (r[0], r[1]))]
 
 
+def report_shape_problem(report):
+    """대조 보고서가 아닌 이유. 보고서면 `None`.
+
+    스키마 이름과 **판정이 실린 두 칸의 타입**을 본다. 요약이 그 둘만 접기 때문에,
+    그 둘이 없으면 "결함 0" 과 구분이 안 된다.
+    """
+    if not isinstance(report, dict):
+        return f"{type(report).__name__} 이다"
+    if report.get("schema") != SCHEMA:
+        return f"schema 가 {report.get('schema')!r} 다"
+    if not isinstance(report.get("counts"), dict):
+        return "counts 가 없거나 사전이 아니다"
+    if not isinstance(report.get("unjudged"), list):
+        return "unjudged 가 없거나 목록이 아니다"
+    return None
+
+
 def latest_report(rep: Path):
     """가장 나중 대조 결과.
 
@@ -590,10 +607,18 @@ def latest_report(rep: Path):
     paths = report_paths(rep)
     if not paths:
         return None
+    path = paths[-1]
     try:
-        return json.loads(paths[-1].read_text())
+        report = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as e:
-        return {"unreadable": f"{paths[-1].name} — {type(e).__name__}"}
+        return {"unreadable": f"{path.name} — {type(e).__name__}"}
+    # **JSON 으로 읽혔다고 대조 보고서인 것은 아니다.** `{}` 도 유효한 JSON 이고,
+    # 그것을 그대로 접으면 유형이 하나도 없으니 **깨끗한 대조로 보인다.** 이름만
+    # 맞는 남의 파일도 마찬가지다. 모양을 확인하고, 아니면 판정 불가로 올린다.
+    problem = report_shape_problem(report)
+    if problem:
+        return {"unreadable": f"{path.name} — {problem}"}
+    return report
 
 
 def unused_path(rep: Path, generated_at: str):

@@ -30,6 +30,13 @@ ISSUANCE = 990001     # 발급 번호
 KEY = "11111111-2222-4333-8444-555555555555"
 
 
+def as_report(when, mark):
+    """진짜 대조 보고서의 모양. **픽스처가 이 모양이어야 한다** — 아니면 판정 불가로
+    걸러지는 것이 정상인 파일을 "보고서" 로 놓고 시험하게 된다."""
+    return {"schema": reconcile_mod.SCHEMA, "generated_at": when,
+            "counts": {}, "unjudged": [], "mark": mark}
+
+
 def tsv(rows):
     body = "".join("\t".join(str(c) for c in r) + "\n" for r in rows)
     return body + f"#EOF\t{len(rows)}\n"
@@ -680,7 +687,7 @@ class ReconcileTest(unittest.TestCase):
             for name, mark in (("reconcile-20260913T034512+0000.json", "첫째"),
                                ("reconcile-20260913T034512+0000-2.json", "둘째"),
                                ("reconcile-20260913T034512+0000-10.json", "열째")):
-                (d / name).write_text(json.dumps({"generated_at": same, "mark": mark}))
+                (d / name).write_text(json.dumps(as_report(same, mark)))
             self.assertEqual(reconcile_mod.latest_report(d)["mark"], "열째")
             self.assertEqual(
                 [p.name for p in reconcile_mod.report_paths(d)],
@@ -692,9 +699,9 @@ class ReconcileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "reconcile-20260913T034512+0000-9.json").write_text(
-                json.dumps({"generated_at": "2026-09-13T03:45:12+00:00", "mark": "이른"}))
+                json.dumps(as_report("2026-09-13T03:45:12+00:00", "이른")))
             (d / "reconcile-20260913T034513+0000.json").write_text(
-                json.dumps({"generated_at": "2026-09-13T03:45:13+00:00", "mark": "늦은"}))
+                json.dumps(as_report("2026-09-13T03:45:13+00:00", "늦은")))
             self.assertEqual(reconcile_mod.latest_report(d)["mark"], "늦은")
 
     def test_보고서가_없으면_None_이다(self):
@@ -708,7 +715,7 @@ class ReconcileTest(unittest.TestCase):
             d = Path(tmp)
             (d / "reconcile-20260913T034512+0000.json").write_text("{ 깨짐")
             (d / "reconcile-20260913T034513+0000.json").write_text(
-                json.dumps({"generated_at": "2026-09-13T03:45:13+00:00", "mark": "멀쩡"}))
+                json.dumps(as_report("2026-09-13T03:45:13+00:00", "멀쩡")))
             self.assertEqual(reconcile_mod.latest_report(d)["mark"], "멀쩡")
 
     def test_최신_보고서가_깨지면_옛것으로_물러서지_않는다(self):
@@ -717,12 +724,51 @@ class ReconcileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp)
             (d / "reconcile-20260913T034512+0000.json").write_text(
-                json.dumps({"generated_at": "2026-09-13T03:45:12+00:00",
-                            "counts": {}, "unjudged": []}))
+                json.dumps(as_report("2026-09-13T03:45:12+00:00", "이른")))
             (d / "reconcile-20260913T034513+0000.json").write_text("{ 잘림")
             got = reconcile_mod.latest_report(d)
         self.assertIn("unreadable", got)
         self.assertIn("034513", got["unreadable"])
+
+    def test_보고서가_아닌_JSON_을_깨끗한_대조로_안_본다(self):
+        # `{}` 도 유효한 JSON 이다. 그대로 접으면 유형이 하나도 없으니 **깨끗한
+        # 대조로 보인다** — 이름만 맞는 남의 파일도 마찬가지다.
+        cases = [
+            ("빈 객체", {}),
+            ("스키마 없음", {"counts": {}, "unjudged": []}),
+            ("스키마 다름", {"schema": "남의것/1", "counts": {}, "unjudged": []}),
+            ("counts 없음", {"schema": reconcile_mod.SCHEMA, "unjudged": []}),
+            ("counts 가 목록", {"schema": reconcile_mod.SCHEMA, "counts": [], "unjudged": []}),
+            ("unjudged 가 사전", {"schema": reconcile_mod.SCHEMA, "counts": {}, "unjudged": {}}),
+            ("객체가 아님", [1, 2, 3]),
+        ]
+        for label, payload in cases:
+            with self.subTest(label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    d = Path(tmp)
+                    (d / "reconcile-20260913T034512+0000.json").write_text(json.dumps(payload))
+                    got = reconcile_mod.latest_report(d)
+                self.assertIn("unreadable", got, label)
+
+    def test_모양이_맞으면_그대로_낸다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "reconcile-20260913T034512+0000.json").write_text(
+                json.dumps(as_report("2026-09-13T03:45:12+00:00", "정상")))
+            got = reconcile_mod.latest_report(d)
+        self.assertNotIn("unreadable", got)
+        self.assertEqual(got["mark"], "정상")
+
+    def test_진짜_대조가_낸_보고서는_모양_검사를_통과한다(self):
+        # 손으로 만든 픽스처만 통과하면 검사가 실물과 어긋난 것이다.
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            subprocess.run([sys.executable, str(CLI), str(f.dir)],
+                           capture_output=True, text=True)
+            got = reconcile_mod.latest_report(f.dir)
+        self.assertIsNotNone(got)
+        self.assertNotIn("unreadable", got)
+        self.assertIsNone(reconcile_mod.report_shape_problem(got))
 
     def test_순서는_파일_내용을_안_읽고_정한다(self):
         # 내용으로 정렬하면 못 읽은 파일의 자리를 정할 수 없다. 이름만으로 정한다.
