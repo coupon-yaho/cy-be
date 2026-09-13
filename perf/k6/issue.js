@@ -8,7 +8,9 @@
 // med 24ms -> 4ms, p95 861ms -> 12ms 로 떨어졌다. 버퍼풀과 JIT 가 지연 꼬리의 대부분이었다.
 import http from 'k6/http';
 import exec from 'k6/execution';
+import { sleep } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
+import { classify, OK, REJECTED, DEFERRED, UNKNOWN } from './outcome.js';
 
 const BASE_URL = __ENV.BASE_URL;
 const TIMEOUT = __ENV.HTTP_TIMEOUT || '60s';
@@ -29,6 +31,20 @@ const TIMEOUT = __ENV.HTTP_TIMEOUT || '60s';
 // docs/measurements/record-overhead.sh). 회차당 4만 줄이 쌓이는 것이 이유고,
 // 대조할 회차에서만 켠다.
 const RECORD = String(__ENV.RECORD_REQUESTS || 'false') === 'true';
+
+// 결과 불명이면 **같은 접수 키로** 한 번 더 보낸다. 명세 F-U-03 이 요구하는 복구가
+// 그 경로이고(*"같은 키로 결과를 확인"*), 그러지 않으면 게이트의 REPLAY_DONE·
+// REPLAY_PENDING 이 회차 내내 한 번도 안 생긴다 — 대조의 "재전송은 한 신청" 판정도
+// 픽스처 밖에서는 만난 적이 없게 된다.
+//
+// 기본은 꺼짐이다. 켠 회차와 끈 회차는 **서버가 받는 요청 수가 다르므로**,
+// 나란히 비교할 회차끼리는 같은 설정이어야 한다.
+const RETRY_UNKNOWN = String(__ENV.RETRY_UNKNOWN || 'false') === 'true';
+// ⚠️ Retry-After 의 초를 그대로 따르지 않는다. 3초를 자면 재전송마다 VU 가 묶여
+//    도착률을 맞추려고 VU 가 몇 배로 늘고, 그러면 재려던 것이 바뀐다. 짧게 쉰다 —
+//    그래서 REPLAY_PENDING 에 곧바로 다시 물어 또 PENDING 을 받을 수 있고,
+//    그것도 사실이라 그대로 기록한다.
+const RETRY_DELAY_MS = Number(__ENV.RETRY_DELAY_MS || 200);
 
 const WARMUP_ROUND = __ENV.WARMUP_ROUND_ID;
 const TARGET_ROUND = __ENV.TARGET_ROUND_ID;
@@ -58,6 +74,11 @@ if (!MEMBER_GRADE || !WARMUP_MEMBER_GRADE) {
 const successes = new Counter('issue_successes');
 const rejections = new Counter('issue_rejections');
 const errors = new Counter('issue_errors');
+// 서버가 **아직 안 정했다**고 말한 4xx. `Retry-After` 가 붙은 응답이다.
+// 거절과 같은 칸에 넣으면 안 된다 — 거절은 판정이고 이쪽은 판정이 없는 상태다.
+const deferred = new Counter('issue_deferred');
+// 같은 키로 다시 보낸 횟수. **이터레이션이 아니다** — 도착률에 안 들어간다.
+const retries = new Counter('issue_retries');
 // ⚠️ 내장 http_reqs 는 워밍업 시나리오까지 합산한다. 그 rate 는 "워밍업 + 대기 + 측정"
 //    전체 실행 시간으로 나눈 값이라 측정 구간의 달성 도착률이 아니다. 실측으로
 //    설정 800/s x 5s 회차에서 http_reqs.rate 가 185/s 로 나왔다 —
@@ -233,8 +254,32 @@ export function measure() {
   // 없는 것이 곧 "결과 불명" 이다 — 대조가 그것을 미해결로 다룬다.
   record('REQ', [key, TARGET_ROUND, memberId]);
 
-  const res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
+  let res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
+  let outcome = classify(res);
+  record(outcome.kind === DEFERRED ? 'UNKNOWN' : outcome.kind, [key, outcome.reason]);
 
+  // 결과 불명이면 **같은 키로** 한 번만 더 보낸다. 무한 재시도는 안 한다 — 계속
+  // 불명이면 그것이 사실이고, 대조가 미해결로 남기는 것이 맞다.
+  if (RETRY_UNKNOWN
+      && (outcome.kind === UNKNOWN || outcome.kind === DEFERRED)) {
+    retries.add(1);
+    sleep(RETRY_DELAY_MS / 1000);
+    // 보내기 전에 남긴다. 첫 요청과 같은 규칙이다.
+    record('REQ', [key, TARGET_ROUND, memberId]);
+    res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
+    outcome = classify(res);
+    record(outcome.kind === DEFERRED ? 'UNKNOWN' : outcome.kind, [key, outcome.reason]);
+  }
+
+  // 지표는 **마지막 응답 하나**만 센다. 한 이터레이션이 여러 칸을 올리면
+  // 성공+거절+보류+5xx 합이 시도 수와 안 맞아 요약표의 산수가 깨진다.
+  // 재전송이 있었다는 사실은 issue_retries 가 따로 말한다.
+  const { kind, reason } = outcome;
+  if (kind === OK) {
+    successes.add(1);
+    successDuration.add(res.timings.duration);
+    return;
+  }
   // ⚠️ 연결이 아예 안 된 실패는 status 0 이고 duration 이 0 이다. 이것을 응답 지연으로
   //    세면 분포가 통째로 거짓이 된다. 톰캣 수용 상한(max-connections + accept-count)을
   //    넘기면 실제로 이쪽으로 찍힌다.
@@ -248,56 +293,22 @@ export function measure() {
     } else {
       otherTransportErrors.add(1, tag);        // TLS·HTTP2·그 밖
     }
-    // **연결 실패도 "안 됐다" 가 아니다.** 타임아웃은 서버가 이미 커밋했을 수 있고,
-    // 연결 거부는 대개 아니다 — 그러나 여기서 가르지 않는다. 가르는 것은 대조가
-    // DB 를 보고 할 일이고, 여기서 단정하면 그 판단을 미리 굳힌다.
-    record('UNKNOWN', [key, String(ec)]);
     return;
   }
-
-  if (res.status === 201) {
-    successes.add(1);
-    successDuration.add(res.timings.duration);
-    record('OK', [key, issuanceIdOf(res)]);
-    return;
-  }
-
-  const code = errorCodeOf(res);
   if (res.status >= 500) {
-    errors.add(1, { code: code });
-    // 5xx 는 **명시적 거절이 아니다.** 서버가 커밋하고 응답에서 터졌을 수 있다.
-    record('UNKNOWN', [key, `HTTP-${res.status}`]);
+    errors.add(1, { code: reason });
     return;
   }
-  rejections.add(1, { code: code });
-  // 4xx 는 서버가 **안 받았다고 말한 것**이다. 그것만 명시적 거절로 둔다.
-  record('REJECTED', [key, code]);
-  if (code === 'COUPON-306') {
+  if (kind === DEFERRED) {
+    // 서버가 **아직 안 정했다.** 거절과 같은 칸에 넣으면 판정이 아닌 것이 판정이 된다.
+    deferred.add(1, { code: reason });
+    return;
+  }
+  rejections.add(1, { code: reason });
+  if (reason === 'COUPON-306') {
     soldOutDuration.add(res.timings.duration);
   } else {
     otherRejectDuration.add(res.timings.duration);
-  }
-}
-
-// 201 응답의 예약번호. 없으면 빈 문자열이다 — **없다는 사실도 기록한다.**
-// 201 인데 id 가 없으면 응답 계약이 깨진 것이고, 그것을 조용히 빼면 대조가
-// "그 건은 애초에 없었다" 로 읽는다.
-function issuanceIdOf(res) {
-  try {
-    const body = res.json();
-    const id = body && body.data && body.data.issuanceId;
-    return id === undefined || id === null ? '' : String(id);
-  } catch (e) {
-    return '';
-  }
-}
-
-function errorCodeOf(res) {
-  try {
-    const body = res.json();
-    return (body && body.error && body.error.code) || `HTTP-${res.status}`;
-  } catch (e) {
-    return `HTTP-${res.status}`;
   }
 }
 
@@ -307,8 +318,12 @@ export function handleSummary(data) {
   const attempts = (data.metrics.issue_attempts
     && data.metrics.issue_attempts.values.count) || 0;
   const clock = data.metrics.measure_clock_ms && data.metrics.measure_clock_ms.values;
+  const retryCount = (data.metrics.issue_retries
+    && data.metrics.issue_retries.values.count) || 0;
   data.perf = {
     measure_attempts: attempts,
+    // 같은 키로 다시 보낸 횟수. 대조가 `기록 줄 수 == 시도 + 재전송` 을 본다.
+    measure_retries: retryCount,
     // Prometheus 질의를 자를 창. 없으면 호출부가 <측정 실패> 로 다뤄야 한다.
     measure_window_start_epoch: clock ? Math.floor(clock.min / 1000) : null,
     measure_window_end_epoch: clock ? Math.ceil(clock.max / 1000) : null,
@@ -342,11 +357,13 @@ function textLine(data) {
     `  (참고) http_reqs.rate ${fmt(g('http_reqs', 'rate'))}/s   <- 워밍업 포함 전체 평균. 달성치가 아니다`,
     `  성공             ${fmt(c('issue_successes'))}`,
     `  거절             ${fmt(c('issue_rejections'))}`,
+    `  보류             ${fmt(c('issue_deferred'))}   <- 서버가 아직 안 정했다. 거절이 아니다`,
     `  5xx              ${fmt(c('issue_errors'))}`,
     `  연결 실패        ${fmt(c('issue_connect_failures'))}   <- 응답이 아니다. 수용 상한·임시 포트를 본다`,
     `  타임아웃         ${fmt(c('issue_timeouts'))}   <- 받긴 했는데 못 끝냈다. 연결 실패와 진단이 반대다`,
     `  기타 전송 오류   ${fmt(c('issue_transport_errors'))}`,
     `  못 쏜 것         ${fmt(c('dropped_iterations'))}`,
+    `  재전송           ${fmt(data.perf.measure_retries)}   <- 같은 키로 다시 보낸 횟수. 이터레이션이 아니다`,
     `  성공 med/p95/p99 ${fmt(g('issue_success_duration', 'med'))} / ${fmt(g('issue_success_duration', 'p(95)'))} / ${fmt(g('issue_success_duration', 'p(99)'))} ms`,
     `  매진 med/p99     ${fmt(g('issue_rejected_sold_out_duration', 'med'))} / ${fmt(g('issue_rejected_sold_out_duration', 'p(99)'))} ms`,
     '',
