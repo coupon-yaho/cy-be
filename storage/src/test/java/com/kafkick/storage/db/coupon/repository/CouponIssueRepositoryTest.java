@@ -537,6 +537,7 @@ class CouponIssueRepositoryTest {
                         throw new UnsupportedOperationException();
                     }
                 },
+                mock(com.kafkick.core.notification.NotificationRequestService.class),
                 new RequestTokenGenerator("storage-test-api"),
                 transactionTemplate
         );
