@@ -250,9 +250,18 @@ export function measure() {
   const memberId = MEMBER_BASE + exec.scenario.iterationInTest;
   const key = uuidV4From(TARGET_ROUND, memberId);
 
+  // **대상과 내용을 함께** 남긴다. 요구사항 §6.3 이 *"요청 전 접수 키·대상·내용을
+  // 기록"* 이라고 둘을 따로 적는다.
+  //
+  // 서버가 보는 요청 내용은 셋이다 — `ISSUE|couponRoundId=…|memberId=…|membershipGrade=…`
+  // (CouponIssueCommand.canonicalRequest). 그 셋째가 등급이고 issuances.issued_grade 로
+  // 남는다. 안 남기면 **엉뚱한 내용으로 발급된 건이 일치로 읽힌다.**
+  //
+  // 옮길 때 이 자리에 들어갈 것은 등급이 아니라 그쪽의 내용(모델·옵션)이다.
+  //
   // **보내기 전에** 남긴다. 여기서 프로세스가 죽어도 REQ 는 남고, 짝이 되는 RES 가
   // 없는 것이 곧 "결과 불명" 이다 — 대조가 그것을 미해결로 다룬다.
-  record('REQ', [key, TARGET_ROUND, memberId]);
+  record('REQ', [key, TARGET_ROUND, memberId, MEMBER_GRADE]);
 
   let res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
   let outcome = classify(res);
@@ -265,7 +274,7 @@ export function measure() {
     retries.add(1);
     sleep(RETRY_DELAY_MS / 1000);
     // 보내기 전에 남긴다. 첫 요청과 같은 규칙이다.
-    record('REQ', [key, TARGET_ROUND, memberId]);
+    record('REQ', [key, TARGET_ROUND, memberId, MEMBER_GRADE]);
     res = issue(TARGET_ROUND, memberId, MEMBER_GRADE);
     outcome = classify(res);
     record(outcome.kind === DEFERRED ? 'UNKNOWN' : outcome.kind, [key, outcome.reason]);

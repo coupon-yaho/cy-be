@@ -58,6 +58,7 @@ DEFECT = (
     "KEY_MISMATCH",          # 그 대상에 발급은 있는데 **내 접수 키로 만들어지지 않았다**
     "TARGET_MISMATCH",       # 내 접수 키의 발급인데 **대상(회차·회원)이 다르다**
     "MISMATCH",              # 받은 예약번호가 DB 와 다르거나 못 읽었다
+    "CONTENT_MISMATCH",      # **요청한 내용과 저장된 내용이 다르다** — 원인이 다르다
     "FALSE_REJECT",          # 안 받았다고 해 놓고 내 키의 발급이 있다
     "ALREADY_ISSUED_PHANTOM",# 이미 있다고 거절해 놓고 그 대상에 발급이 없다
     "ORPHAN",                # 발급의 접수 키가 보낸 기록에 없다
@@ -78,6 +79,9 @@ ALL_TYPES = CLEAN + DEFECT + PENDING
 #    여전히 유효하고, 그것까지 버리면 진짜 검출을 가드가 덮는다.
 NEEDS = {
     "issuances": tuple(t for t in ALL_TYPES if t != "INCOMPLETE"),
+    # 내용을 안 담은 기록(옛 형식)으로는 이 축을 판정할 수 없다. 없는 값을 "맞다" 로
+    # 세는 것이 이 도구가 가장 하면 안 되는 일이다.
+    "content": ("CONTENT_MISMATCH",),
     # 접수 키가 조인 축이다. 이력을 못 읽으면 "내 키의 발급" 을 아예 못 고른다.
     "histories": ("MATCHED", "MATCHED_STATUS_CHANGED", "LOST", "KEY_MISMATCH",
                   "TARGET_MISMATCH", "MISMATCH", "FALSE_REJECT", "RESOLVED_ISSUED",
@@ -139,11 +143,18 @@ def read_records(path: Path):
         kind = parts[1] if len(parts) > 1 else ""
         if kind == "RUN" and len(parts) == 3:
             runs.add(parts[2])
-        elif kind == "REQ" and len(parts) == 5:
+        elif kind == "REQ" and len(parts) in (5, 6):
+            # 5칸은 내용을 안 담던 옛 형식이다. **거절하지 않는다** — 옛 회차를 다시
+            # 대조하는 것이 이 도구의 쓰임새이고, 거절하면 그 회차가 통째로 판정
+            # 불가가 된다. 대신 내용 축만 판정하지 않는다(아래 completeness["content"]).
             key, rnd, member = parts[2], parts[3], parts[4]
             entry = by_key.setdefault(key, _new_entry())
             entry["attempts"] += 1
             entry["targets"].add((rnd, member))
+            if len(parts) == 6:
+                entry["contents"].add(parts[5])
+            else:
+                entry["contents"].add(None)
         elif kind in ("OK", "REJECTED", "UNKNOWN") and len(parts) == 4:
             by_key.setdefault(parts[2], _new_entry())["outcomes"].append(
                 (kind, parts[3]))
@@ -153,10 +164,30 @@ def read_records(path: Path):
 
 
 def _new_entry():
-    return {"attempts": 0, "targets": set(), "outcomes": []}
+    return {"attempts": 0, "targets": set(), "contents": set(), "outcomes": []}
 
 
 # ─────────────────────────────── 판정 ───────────────────────────────
+
+def wrong_content(entry, row):
+    """요청한 내용과 저장된 내용이 다른가.
+
+    ⚠️ **내용을 모르면 반드시 `False` 를 내야 한다.** 이 함수는 `elif` 사슬 안에
+    있어서, 참을 내면 그 갈래가 기록을 가져간다. 그런데 `CONTENT_MISMATCH` 가
+    `unjudged` 면 `add` 가 아무것도 안 남기고 — **그 기록은 어떤 판정에도 안 잡힌다.**
+    `MATCHED` 로 갈 기회 자체가 사라진다.
+
+    한 번 이 가드를 "바깥 게이트가 이미 거르니 죽은 코드" 로 보고 지웠다가 시험이
+    잡았다. 돌연변이 하나가 살아남은 것을 **도달 불가**로 읽었는데, 실은 그 돌연변이가
+    다른 경로로 같은 결과를 냈을 뿐이었다.
+
+    한 키에 내용이 여럿인 경우는 불일치다. 같은 키에 다른 내용을 보낸 것이고,
+    서버는 그것을 `COUPON-404` 로 거절한다.
+    """
+    if not entry["contents"] or None in entry["contents"]:
+        return False
+    return entry["contents"] != {row["content"]}
+
 
 def conclude(outcomes):
     """한 접수 키의 결론. **가장 확정적인 결과가 이긴다.**
@@ -222,6 +253,29 @@ def judge(records, issuances, histories, idem, target_round, judged):
             continue
         row = mine[0] if mine else None
 
+        # ── 대상·내용은 **결과와 무관하게** 본다 ────────────────────────────
+        #
+        # 내 접수 키의 발급이 잡혔으면, 그것이 내가 요청한 대상·내용인지는 응답을
+        # 받았든 잃었든 똑같이 물어야 하는 질문이다. 예전에는 이 둘이 `OK` 갈래
+        # 안에만 있어서, **응답을 잃은 건은 내용이 달라도 `RESOLVED_ISSUED`(정상)로
+        # 나갔다** — 실측으로 재현했다(VIP 요청 · BASIC 저장 · 종료코드 0).
+        #
+        # ⚠️ `wrong_content` 는 내용을 모르면 거짓을 낸다. 그래야 그 유형이
+        #    `unjudged` 일 때 이 `continue` 가 기록을 통째로 삼키지 않는다.
+        if row is not None and (row["coupon_id"], row["member_id"]) != (rnd, member):
+            add("TARGET_MISMATCH", key,
+                f"내 접수 키의 발급 {row['id']} 이"
+                f" 회차 {row['coupon_id']} · 회원 {row['member_id']} 앞으로 있다",
+                **common)
+            continue
+        if row is not None and wrong_content(entry, row):
+            # **대상은 맞는데 내용이 다르다.** MISMATCH 와 원인이 다르다 —
+            # 그쪽은 응답과 저장의 어긋남이고 이쪽은 **요청과 저장**의 어긋남이다.
+            add("CONTENT_MISMATCH", key,
+                f"요청한 내용 {sorted(entry['contents'])} · DB 의 발급"
+                f" {row['id']} 은 {row['content']}", **common)
+            continue
+
         if kind == "OK":
             if row is None and not at_target:
                 got = ", ".join(v for v in values if v) or "예약번호 없음"
@@ -232,11 +286,6 @@ def judge(records, issuances, histories, idem, target_round, judged):
                 add("KEY_MISMATCH", key,
                     f"발급 {[r['id'] for r in at_target]} 이 그 대상에 있는데"
                     " 내 접수 키로 만들어진 것이 아니다", **common)
-            elif (row["coupon_id"], row["member_id"]) != (rnd, member):
-                add("TARGET_MISMATCH", key,
-                    f"내 접수 키의 발급 {row['id']} 이"
-                    f" 회차 {row['coupon_id']} · 회원 {row['member_id']} 앞으로 있다",
-                    **common)
             elif len({v for v in values if v}) > 1:
                 # 재전송이 서로 다른 예약번호를 받았다. 멱등이 깨졌다는 뜻이고,
                 # DB 에 한 행뿐이어도 그렇다 — 클라이언트가 받은 것이 증거다.
@@ -358,14 +407,23 @@ def reconcile(rep: Path):
                 keep[key] = entry
         records = keep
         completeness["records"] = "COMPLETE"
+        # 한 건이라도 내용이 없으면 그 축은 판정하지 않는다. 옛 형식 기록이 섞이면
+        # **없는 값을 "맞다" 로 세게 되고**, 그것이 이 도구가 가장 하면 안 되는 일이다.
+        # 기록이 하나도 없으면 이 축은 **할 말이 없는 것**이지 못 재는 것이 아니다.
+        # 그때까지 판정 불가로 만들면 멀쩡한 회차가 빨개진다.
+        completeness["content"] = (
+            "COMPLETE" if all(None not in e["contents"] for e in records.values())
+            else "MISSING")
     except Incomplete as e:
         records, stats = {}, {"lines": 0, "records": 0, "foreign": 0, "malformed": 0}
         completeness["records"] = "MISSING"
+        completeness["content"] = "MISSING"
         problems.append(str(e))
 
     try:
-        issuances = [{"id": r[0], "coupon_id": r[1], "member_id": r[2], "status": r[3]}
-                     for r in read_tsv(rep / "db-issuances.tsv", 4)]
+        issuances = [{"id": r[0], "coupon_id": r[1], "member_id": r[2],
+                      "status": r[3], "content": r[4]}
+                     for r in read_tsv(rep / "db-issuances.tsv", 5)]
         completeness["issuances"] = "COMPLETE"
     except Incomplete as e:
         issuances = []
@@ -434,6 +492,7 @@ def reconcile(rep: Path):
         # 덤프를 빈 덤프로 읽지 않는 것과 같은 이유다. 몇 줄까지 봐 줄지는 안 재
         # 봤고, **안 잰 임계값을 박는 대신 어긋나면 판정하지 않는다.**
         completeness["records"] = "PARTIAL"
+        completeness["content"] = "MISSING"
         records = {}
 
     judged = {t for t in ALL_TYPES
@@ -560,6 +619,7 @@ def diff(before, after):
 
 
 def print_diff(out):
+    cleared = 0
     if not out["per_key"]:
         print("⚠️ 회차가 다르다. 유형별 집계만 비교한다 — 키 단위 비교는 뜻이 없다")
     print(f"{out['before']}  →  {out['after']}")
@@ -571,9 +631,20 @@ def print_diff(out):
         if e["comparable"]:
             line += (f"   잔여 {len(e['residual'])} ·"
                      f" 신규 {len(e['new'])} · 해소 {len(e['cleared'])}")
+            cleared += len(e["cleared"])
         elif t in out["not_comparable"]:
             line += "   비교 불가 — 한쪽이 이 유형을 판정하지 못했다"
         print(line)
+    if cleared:
+        # **이 표는 변화를 말하지 원인을 말하지 않는다.** 요구사항 §6.3 —
+        # *"자동 복구를 주장하려면 해당 키의 재시도·처리 이력도 확인"*.
+        # 여기서 원인을 적으면 검사기가 미정인 것을 확정하는 셈이 된다.
+        print(f"\n  ⓘ 해소 {cleared}건은 상태가 변했다는 **사실**이다."
+              " 왜 변했는지는 이 표가 말하지 않는다 —")
+        print("     늦게 들어온 등록일 수도, 다른 경로의 보상일 수도,"
+              " 사람이 손댄 것일 수도 있다.")
+        print("     이유를 보려면 그 키의 처리 이력(issuance_histories 의"
+              " 상태 전이)을 따로 읽는다.")
     return 0
 
 

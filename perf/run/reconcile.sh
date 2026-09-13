@@ -5,8 +5,12 @@
 #   perf/run/reconcile.sh perf/results/<run-id>                    묶음 전체
 #
 # **사람이 부를 때만 돈다.** 주기 실행도, 전용 서버도, 화면도 만들지 않는다 — 부하 뒤에
-# 한 번, 그리고 복구를 기다린 뒤 한 번 더 부르는 것이 쓰임새 전부다. 두 번째 대조가
-# 첫 번째의 "미해결" 을 지워 주면 그것은 늦게 들어온 등록이고, 안 지워지면 유실이다.
+# 한 번, 그리고 복구를 기다린 뒤 한 번 더 부르는 것이 쓰임새 전부다.
+#
+# ⚠️ 두 대조의 차이는 **상태가 변했다는 사실**이지 변한 이유가 아니다. 미해결이
+#    지워진 이유는 늦게 들어온 등록일 수도, 다른 경로의 보상일 수도, 사람이 손댄
+#    것일 수도 있다 — 스냅샷 둘로는 못 가른다. 이유를 알려면 그 키의 처리 이력
+#    (issuance_histories 의 상태 전이)을 따로 봐야 한다.
 #
 # **DB 에 쓰지 않는다.** 읽기 질의 셋뿐이고, 결과를 파일로 떨군 뒤 판정은
 # reconcile.py 가 한다. 판정을 파이썬에 두는 이유는 픽스처 파일만으로 시험할 수
@@ -83,8 +87,10 @@ for REP in "${REPS[@]}"; do
   fi
 
   log "대상 회차 $ROUND 의 발급을 읽는다"
+  # issued_grade 도 뜬다 — 서버가 보는 **요청 내용**의 한 칸이고
+  # (canonicalRequest 가 해시하는 셋 중 하나), 독립 기록과 맞대야 한다.
   dump db-issuances.tsv "
-    SELECT i.id, i.coupon_id, i.member_id, i.status
+    SELECT i.id, i.coupon_id, i.member_id, i.status, i.issued_grade
     FROM issuances i WHERE i.coupon_id = $ROUND$ID_CLAUSE ORDER BY i.id;"
 
   # 발급마다 접수 키가 하나 붙어 있다. **이것이 조인 축이다.**
