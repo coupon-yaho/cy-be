@@ -209,6 +209,35 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.types(report), {"ALREADY_ISSUED_PHANTOM": 1})
         self.assertEqual(code, 1)
 
+    def test_매진_거절_뒤_이미_있다면_거짓_거절이_아니다(self):
+        # 재시도가 매진으로 한 번 튕기고 다음에 "이미 있다" 를 받았다. 뒤쪽만이
+        # 발급이 있다는 증언이라, 앞쪽을 집으면 멀쩡한 발급이 거짓 거절로 잡힌다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+             f"CY960\tREJECTED\t{KEY}\tCOUPON-306",
+             f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+             f"CY960\tREJECTED\t{KEY}\tCOUPON-305"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+        self.assertEqual(self.types(report), {"ALREADY_ISSUED_CONFIRMED": 1})
+        self.assertEqual(code, 0)
+
+    def test_성공인데_예약번호를_못_읽으면_불일치다(self):
+        # 201 인데 본문에 issuanceId 가 없거나 파싱이 깨졌다. 대상이 맞으니 발급은
+        # 있지만 **무엇을 받았는지 확인이 안 된다** — 정상으로 세면 그것이 사라진다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t"],
+            [(ISSUANCE, ROUND, MEMBER, "ISSUED")])
+        self.assertEqual(self.types(report), {"MISMATCH": 1})
+        self.assertIn("예약번호를 못 읽었다", report["findings"][0]["detail"])
+        self.assertEqual(code, 1)
+
+    def test_예약번호를_못_읽었고_발급도_없으면_유실이다(self):
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t"])
+        self.assertEqual(self.types(report), {"LOST": 1})
+        self.assertIn("예약번호 없음", report["findings"][0]["detail"])
+        self.assertEqual(code, 1)
+
     # ── 재기동 ───────────────────────────────────────────────────────
 
     def test_멱등이_진행중으로_멈춰_있으면_미완료다(self):

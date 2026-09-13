@@ -198,12 +198,19 @@ def judge(records, issuances, idem, target_round, judged):
         row = rows[0] if rows else None
         if kind == "OK":
             if row is None:
-                add("LOST", key, f"성공 응답(예약번호 {values})을 받았는데 발급이 없다",
-                    **common)
+                got = ", ".join(v for v in values if v) or "예약번호 없음"
+                add("LOST", key, f"성공 응답({got})을 받았는데 발급이 없다", **common)
             elif len(set(v for v in values if v)) > 1:
                 add("MISMATCH", key, f"한 접수 키에 예약번호가 여럿이다 — {sorted(set(values))}",
                     **common)
-            elif values and values[0] and values[0] != row["id"]:
+            elif not any(values):
+                # 201 인데 예약번호가 없다. 응답 계약이 깨졌거나 본문을 못 읽은 것이다.
+                # 대상이 맞으니 발급 자체는 있지만, **무엇을 받았는지 확인이 안 된다** —
+                # 정상으로 세면 그 확인 불가가 사라진다.
+                add("MISMATCH", key,
+                    f"성공 응답에서 예약번호를 못 읽었다 · DB 의 발급 {row['id']}",
+                    **common)
+            elif values[0] and values[0] != row["id"]:
                 add("MISMATCH", key,
                     f"받은 예약번호 {values[0]} · DB 의 발급 {row['id']}", **common)
             elif row["status"] != FRESH_ISSUANCE_STATUS:
@@ -212,7 +219,10 @@ def judge(records, issuances, idem, target_round, judged):
             else:
                 add("MATCHED", key, f"발급 {row['id']}", **common)
         elif kind == "REJECTED":
-            code = values[0]
+            # 거절이 여럿이면 **"이미 있다" 가 이긴다.** 그 거절만이 발급이 있다는
+            # 증언이라, 매진 거절을 먼저 집으면 멀쩡한 발급이 거짓 거절로 잡힌다.
+            code = (ALREADY_ISSUED_CODE if ALREADY_ISSUED_CODE in values
+                    else values[0])
             if code == ALREADY_ISSUED_CODE:
                 if row is None:
                     add("ALREADY_ISSUED_PHANTOM", key,
