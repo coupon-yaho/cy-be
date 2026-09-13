@@ -324,11 +324,23 @@ def reconcile(rep: Path):
     for f in findings:
         counts[f["type"]] += 1
 
-    dropped = 0
+    # **기록기 자체를 잰다.** measure_attempts 는 k6 가 프로세스 안에서 센 측정 시도
+    # 수이고, REQ 줄 수와 **같아야 한다** — 둘 다 measure() 한 번에 하나씩 는다.
+    # 어긋나면 기록이 짧다는 뜻이고, 그러면 유실·미해결 집계가 그만큼 모자라다.
+    # 잘못 잰 수가 안 잰 것보다 나쁘므로 그 사실을 반드시 적는다.
+    dropped, attempts = 0, None
     summary = rep / "k6-summary.json"
     if summary.exists():
-        dropped = (json.loads(summary.read_text()).get("metrics", {})
+        k6 = json.loads(summary.read_text())
+        dropped = (k6.get("metrics", {})
                    .get("dropped_iterations", {}).get("values", {}).get("count", 0))
+        attempts = k6.get("perf", {}).get("measure_attempts")
+    recorded = sum(e["attempts"] for e in records.values())
+    if attempts is not None and completeness["records"] == "COMPLETE" \
+            and recorded != attempts:
+        problems.append(
+            f"k6 는 측정 시도를 {attempts}건으로 셌는데 기록은 {recorded}건이다"
+            " — 기록 파일이 짧다. 유실·미해결 집계가 그만큼 모자라다")
 
     return {
         "schema": SCHEMA,
@@ -342,7 +354,8 @@ def reconcile(rep: Path):
             # 보낸 기록조차 없는 요청이 있으면 **양쪽에서 동시에 빠진 것**이다. 그건 여기
             # 총계로만 보인다 — 어느 키인지는 알 방법이 없다.
             "configured_requests": rnd["configured_requests"],
-            "recorded_requests": sum(e["attempts"] for e in records.values()),
+            "recorded_requests": recorded,
+            "k6_measure_attempts": attempts,
             "dropped_iterations": int(dropped),
             "record_lines": stats["lines"],
             "foreign_lines": stats["foreign"],
