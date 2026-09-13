@@ -260,10 +260,25 @@ class NotificationDeliveryServiceTest {
                 service.prepare(event(1, AttemptTrigger.INITIAL), AT.plusSeconds(2));
 
         assertThat(auto.idempotencyKey()).isEqualTo("41:1");
-        // 같은 알림이라도 회차가 다르면 키가 다르다 — 그것이 "새 발송" 의 표시다.
-        assertThat(NotificationDeliveryDecision
-                .send(auto.notification(), 2, 2, AttemptTrigger.MANUAL).idempotencyKey())
-                .isEqualTo("41:2");
+
+        // **정적 팩토리를 직접 부르지 않는다.** send(notification, 2, 2, MANUAL) 로
+        // 단언하면 baseAttemptSeq 를 시험이 손으로 넣는 셈이라, prepare 가 엉뚱한
+        // 값을 넘겨도 통과한다 — 값 객체의 문자열 조립만 태우는 시험이 된다.
+        // 수동 재처리가 실제로 서 있는 상태(SENDING · 2번째 시도 · 그 시도의
+        // 아웃박스가 MANUAL)를 만들어 prepare 에 태운다.
+        Notification reprocessing = new Notification(41L, 10L, 20L, 100L,
+                Notification.DEFAULT_CHANNEL, NotificationStatus.SENDING, 2, 1, null,
+                "member:20", "coupon-issued:100", AT, AT, null, AT);
+        when(notifications.findById(41L)).thenReturn(Optional.of(reprocessing));
+        when(outboxes.findTriggerByNotificationIdAndAttemptSeq(41L, 2))
+                .thenReturn(Optional.of(AttemptTrigger.MANUAL));
+
+        NotificationDeliveryDecision manual =
+                service.prepare(event(2, AttemptTrigger.MANUAL), AT.plusSeconds(60));
+
+        // 같은 알림이라도 **시도 번호**가 다르면 키가 다르다 — 그것이 "새 발송" 의 표시다.
+        assertThat(manual.action()).isEqualTo(Action.SEND);
+        assertThat(manual.idempotencyKey()).isEqualTo("41:2");
     }
 
     private static Notification pending() {

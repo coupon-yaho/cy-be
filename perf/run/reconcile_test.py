@@ -1190,7 +1190,7 @@ class ReconcileTest(unittest.TestCase):
         """
         records, _ = self.sent()
         code, report, _ = self.check(
-            records, [issuance(1, ROUND, MEMBER, "CANCELED")], notifications=[])
+            records, [issuance(1, ROUND, MEMBER, "CANCELLED")], notifications=[])
         self.assertEqual(code, 1)
         self.assertEqual(report["counts"]["NOTIFICATION_MISSING"], 1)
 
@@ -1284,6 +1284,25 @@ class ReconcileTest(unittest.TestCase):
         keys = [f["key"] for f in report["findings"]
                 if f["type"] == "NOTIFICATION_MISSING"]
         self.assertEqual(len(set(keys)), 2, keys)
+
+    def test_다른_회차의_발급을_가리키는_알림은_고아가_아니라_대상_불일치다(self):
+        """**이름이 틀리면 고치는 사람이 엉뚱한 데를 판다.**
+
+        그 발급이 덤프에 있으면 "가리키는 발급이 없다"(고아)가 아니라 "알림의
+        대상이 그 발급과 다르다"(대상 불일치)가 맞는 이름이다. 그래서 reconcile.sh
+        가 알림이 가리키는 발급을 발급 덤프로 함께 끌어온다 — 이 시험은 그 덤프가
+        왔을 때 이름이 제대로 붙는지를 본다.
+        """
+        records, issuances = self.sent()
+        code, report, _ = self.check(
+            records,
+            issuances + [issuance(9, ROUND + 1, MEMBER + 1, "ISSUED")],
+            notifications=derive_notifications(issuances) + [
+                (9 + NOTIFICATION_ID_BASE, 9, ROUND, MEMBER + 1, "PENDING",
+                 1, "INITIAL", "PENDING")])
+        self.assertEqual(code, 1)
+        self.assertEqual(report["counts"]["NOTIFICATION_TARGET_MISMATCH"], 1)
+        self.assertEqual(report["counts"]["NOTIFICATION_ORPHAN"], 0)
 
     def test_알림_덤프가_없으면_그_넷만_판정_불가다(self):
         """첫 구간의 판정은 살아 있어야 한다. 한 덤프가 빠졌다고 전부

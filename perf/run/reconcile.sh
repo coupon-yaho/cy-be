@@ -93,9 +93,20 @@ for REP in "${REPS[@]}"; do
   log "대상 회차 $ROUND 의 발급을 읽는다"
   # issued_grade 도 뜬다 — 서버가 보는 **요청 내용**의 한 칸이고
   # (canonicalRequest 가 해시하는 셋 중 하나), 독립 기록과 맞대야 한다.
+  #
+  # **알림이 가리키는 발급도 끌어온다.** 이것이 없으면 두 덤프의 회차 밖 도달 범위가
+  # 어긋난다 — 다른 회차의 멀쩡한 발급을 가리키는 알림이 여기 없어서 고아(발급이
+  # 덤프에 없다)로 이름 붙고, 진짜 이름인 대상 불일치를 못 낸다. 결함은 잡히지만
+  # 이름이 틀리고, 이름이 틀리면 고치는 사람이 엉뚱한 데를 판다.
+  #
+  # 두 하위 질의 다 인덱스를 탄다 — notifications 는 ix_notifications_coupon_status
+  # 의 선두 컬럼이고, 바깥은 기본 키다.
   dump db-issuances.tsv "
     SELECT i.id, i.coupon_id, i.member_id, i.status, i.issued_grade
-    FROM issuances i WHERE i.coupon_id = $ROUND$ID_CLAUSE ORDER BY i.id;"
+    FROM issuances i
+    WHERE i.coupon_id = $ROUND$ID_CLAUSE
+       OR i.id IN (SELECT n.issuance_id FROM notifications n WHERE n.coupon_id = $ROUND)
+    ORDER BY i.id;"
 
   # 발급마다 접수 키가 하나 붙어 있다. **이것이 조인 축이다.**
   #
@@ -156,6 +167,11 @@ for REP in "${REPS[@]}"; do
   # 대응 발급이 없는 알림(고아)이 덤프에 아예 안 나와서 **검출이 사라진다.**
   # 그 컬럼은 스키마 주석이 "회차(coupons.id) 요약 집계 축" 이라고 적어 둔 것이다.
   #
+  # ⚠️ 그 축 **하나만으로는 모자란다.** 알림의 coupon_id 가 잘못 저장됐고 그 건의
+  #    성공 응답까지 유실되면 어느 절에도 안 걸려 덤프에서 빠진다. 그러면 대상
+  #    불일치가 알림 누락으로 이름이 바뀐다 — 그래서 회차 발급이 가리키는 알림을
+  #    하위 질의로 함께 끌어온다. 발급 덤프의 대칭 절과 짝이다.
+  #
   # LEFT JOIN 이다. 아웃박스가 없는 알림이 **이 대조가 찾는 결함 중 하나**라
   # INNER 로 묶으면 그 행이 사라진다. 아웃박스가 여럿인 알림(수동 재처리)은
   # 줄이 여럿 나오고, 묶는 것은 파이썬이 한다.
@@ -172,6 +188,7 @@ for REP in "${REPS[@]}"; do
     FROM notifications n
     LEFT JOIN notification_outbox o ON o.notification_id = n.id
     WHERE n.coupon_id = $ROUND$NOTIFY_ID_CLAUSE
+       OR n.issuance_id IN (SELECT i.id FROM issuances i WHERE i.coupon_id = $ROUND)
     ORDER BY n.id, o.attempt_seq;"
 done
 
