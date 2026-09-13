@@ -43,10 +43,31 @@ dump() {
   log "$name — $(grep -c '' "$out")줄 (센티널 포함)"
 }
 
+# 회차 밖으로 나간 발급을 되짚을 유일한 끈은 **성공 응답이 알려 준 예약번호**다.
+#
+# 회차로만 뜨면, 내 접수 키의 발급이 **다른 회차** 앞으로 만들어진 경우 그 행이 덤프에
+# 아예 없어서 대조가 TARGET_MISMATCH 가 아니라 LOST 로 읽는다 — 결함은 잡되 이름이
+# 틀린다. 클라이언트가 받은 번호로 기본 키를 직접 짚으면 인덱스 한 번이라 싸다.
+#
+# ⚠️ 이 보강은 **성공 응답을 받은 건에만** 닿는다. 결과 불명이거나 거절인데 발급이
+#    다른 회차에 생긴 경우는 짚을 번호 자체가 없어 여전히 안 보인다. request_id 에
+#    인덱스가 없어 키로 훑는 길은 열지 않았다.
+REPORTED=""
+if [[ -f "$REP/requests.log" ]]; then
+  REPORTED=$(awk -F'\t' '$1 == "CY960" && $2 == "OK" && $4 ~ /^[0-9]+$/ { print $4 }' \
+    "$REP/requests.log" | sort -un | paste -sd, -)
+fi
+if [[ -n "$REPORTED" ]]; then
+  ID_CLAUSE=" OR i.id IN ($REPORTED)"
+  log "성공 응답이 알려 준 예약번호 $(awk -F, '{print NF}' <<<"$REPORTED")개로 회차 밖도 짚는다"
+else
+  ID_CLAUSE=""
+fi
+
 log "대상 회차 $ROUND 의 발급을 읽는다"
 dump db-issuances.tsv "
-  SELECT id, coupon_id, member_id, status
-  FROM issuances WHERE coupon_id = $ROUND ORDER BY id;"
+  SELECT i.id, i.coupon_id, i.member_id, i.status
+  FROM issuances i WHERE i.coupon_id = $ROUND$ID_CLAUSE ORDER BY i.id;"
 
 # 발급마다 접수 키가 하나 붙어 있다. **이것이 조인 축이다.**
 #
@@ -61,7 +82,7 @@ dump db-histories.tsv "
   SELECT h.issuance_id, IFNULL(h.request_id, '')
   FROM issuance_histories h
   JOIN issuances i ON i.id = h.issuance_id
-  WHERE i.coupon_id = $ROUND AND h.event_type = 'ISSUE'
+  WHERE (i.coupon_id = $ROUND$ID_CLAUSE) AND h.event_type = 'ISSUE'
   ORDER BY h.issuance_id;"
 
 # 멱등 레코드는 두 갈래로 모은다.
@@ -76,22 +97,28 @@ dump db-histories.tsv "
 # DONE 으로 바뀐다), 수십만 행이 나온다면 그 사실 자체가 검출이다. 그래서 상한을
 # 두되 **상한에 닿았는지를 알 수 있게** 한 줄 더 받아 온다.
 log "멱등 레코드를 읽는다 (완료분은 회차로, 미완료분은 전량 — 인덱스가 없어 풀 스캔이다)"
+# ⚠️ 괄호로 묶는다. MySQL 에서 괄호 없는 LIMIT 은 **UNION ALL 결과 전체**에 걸린다 —
+#    그러면 완료 행 10만 개짜리 정상 회차가 상한에 닿은 것으로 보이고, 아래 검사가
+#    멀쩡한 덤프를 지운다. 상한은 **끝이 없는 두 번째 갈래에만** 필요하다.
 dump db-idempotency.tsv "
-  SELECT r.idem_key, r.status, IFNULL(r.member_id, ''), IFNULL(r.issuance_id, '')
-  FROM idempotency_records r
-  JOIN issuances i ON i.id = r.issuance_id
-  WHERE i.coupon_id = $ROUND
+  (SELECT r.idem_key, r.status, IFNULL(r.member_id, ''), IFNULL(r.issuance_id, '')
+   FROM idempotency_records r
+   JOIN issuances i ON i.id = r.issuance_id
+   WHERE i.coupon_id = $ROUND)
   UNION ALL
-  SELECT r.idem_key, r.status, IFNULL(r.member_id, ''), IFNULL(r.issuance_id, '')
-  FROM idempotency_records r
-  WHERE r.status <> 'DONE'
-  LIMIT 100001;"
+  (SELECT r.idem_key, r.status, IFNULL(r.member_id, ''), IFNULL(r.issuance_id, '')
+   FROM idempotency_records r
+   WHERE r.status <> 'DONE'
+   LIMIT 100001);"
 
-if [[ -f "$REP/db-idempotency.tsv" ]] \
-   && (( $(grep -c '' "$REP/db-idempotency.tsv") > 100001 )); then
-  log "⚠️ 멱등 덤프가 상한 100000 에 닿았다. 미완료 행이 그만큼 쌓였다는 뜻이고,
-      그 자체가 검출이다 — 대조 전에 그쪽부터 본다. 덤프를 지워 판정 불가로 남긴다"
-  rm -f "$REP/db-idempotency.tsv"
+# 상한에 닿았는지도 **미완료 행만** 센다. 완료 행과 센티널까지 세면 같은 착각이 난다.
+if [[ -f "$REP/db-idempotency.tsv" ]]; then
+  pending=$(awk -F'\t' '$1 !~ /^#EOF/ && $2 != "DONE"' "$REP/db-idempotency.tsv" | wc -l)
+  if (( pending > 100000 )); then
+    log "⚠️ 미완료 멱등 행이 상한 100000 에 닿았다. 그 자체가 검출이다 —
+      대조 전에 그쪽부터 본다. 덤프를 지워 판정 불가로 남긴다"
+    rm -f "$REP/db-idempotency.tsv"
+  fi
 fi
 
 python3 "$PERF_DIR/run/reconcile.py" "$REP"

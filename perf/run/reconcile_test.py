@@ -67,8 +67,9 @@ class Fixture:
             "configured_requests": configured}))
         # measure_attempts 는 k6 가 늘 낸다. 픽스처가 빼면 런타임에 없는 형상이 된다 —
         # 기본은 이 파일의 REQ 줄 수와 맞춘다.
-        attempts = len([r for r in records if r.startswith("CY960\tREQ\t")]) \
-            if measure_attempts is None else measure_attempts
+        attempts = measure_attempts if measure_attempts is not None else len(
+            [r for r in records
+             if r.startswith("CY960\tREQ\t") and r.split("\t")[3:4] == [str(round_id)]])
         (self.dir / "k6-summary.json").write_text(json.dumps({
             "metrics": {"dropped_iterations": {"values": {"count": dropped}}},
             "perf": {"measure_attempts": attempts}}))
@@ -166,16 +167,27 @@ class ReconcileTest(unittest.TestCase):
         # 설정 5 − 기록 1 − 못 쏨 2 = 2건이 어디에도 없다.
         self.assertIn("설명 안 되는 2건", proc.stdout)
 
-    def test_k6_가_센_시도와_기록_줄_수가_어긋나면_적는다(self):
-        # 둘 다 measure() 한 번에 하나씩 는다. 어긋나면 기록 파일이 짧다는 뜻이고,
-        # 유실·미해결 집계가 그만큼 모자라다. 판정을 바꾸지는 않지만 반드시 적는다.
-        _, report, proc = self.check(
+    def test_k6_가_센_시도와_기록_줄_수가_어긋나면_판정하지_않는다(self):
+        # 둘 다 measure() 한 번에 하나씩 는다. 어긋나면 기록이 온전하지 않다는 뜻이고,
+        # **그 기록으로 낸 판정은 못 믿는다** — 빠진 키는 애초에 없던 것처럼 보인다.
+        code, report, proc = self.check(
             [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
             [(ISSUANCE, ROUND, MEMBER, "ISSUED")], measure_attempts=4)
         self.assertEqual(report["totals"]["k6_measure_attempts"], 4)
-        self.assertTrue(any("기록 파일이 짧다" in p for p in report["problems"]),
+        self.assertEqual(report["completeness"]["records"], "PARTIAL")
+        self.assertTrue(any("온전하지 않다" in p for p in report["problems"]),
                         report["problems"])
-        self.assertIn("기록 파일이 짧다", proc.stderr)
+        self.assertIn("온전하지 않다", proc.stderr)
+        self.assertEqual(code, 3)
+
+    def test_기록이_짧으면_있던_결함도_판정하지_않는다(self):
+        # 짧은 기록으로 낸 유실 수는 실제보다 작다. 그 수를 내놓으면 보는 사람이
+        # 그것을 전부로 읽는다 — 안 세는 편이 낫다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            measure_attempts=9)
+        self.assertEqual(self.types(report), {})
+        self.assertEqual(code, 3)
 
     def test_시도와_기록이_맞으면_아무_말도_안_한다(self):
         _, report, _ = self.check(
@@ -257,6 +269,17 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.types(report), {"TARGET_MISMATCH": 1})
         self.assertEqual(report["findings"][0]["key"], KEY)
         self.assertIn(f"회원 {MEMBER + 7}", report["findings"][0]["detail"])
+        self.assertEqual(code, 1)
+
+    def test_내_키의_발급이_다른_회차_앞으로_있어도_잡는다(self):
+        # 덤프를 대상 회차로만 뜨면 이 행이 아예 없어 LOST 로 읽힌다 — 결함은 잡되
+        # 이름이 틀린다. reconcile.sh 가 성공 응답의 예약번호로 회차 밖을 짚는다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}", f"CY960\tOK\t{KEY}\t{ISSUANCE}"],
+            [(ISSUANCE, ROUND + 5, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"TARGET_MISMATCH": 1})
+        self.assertIn(f"회차 {ROUND + 5}", report["findings"][0]["detail"])
         self.assertEqual(code, 1)
 
     def test_한_접수_키가_발급_둘을_만들면_멱등이_깨진_것이다(self):
@@ -586,6 +609,25 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("잔여 1 · 신규 1 · 해소 1", proc.stdout)
 
+    def test_한쪽이_판정_못_한_유형은_비교하지_않는다(self):
+        # before 는 이력을 못 읽어 고아를 판정하지 못했고 after 는 판정했다. 그 목록을
+        # 집합으로 빼면 고아가 전부 "신규" 로 나온다 — 아무 일도 안 일어났는데 새로
+        # 생긴 것처럼 보인다.
+        with tempfile.TemporaryDirectory() as tmp:
+            b = Path(tmp) / "before"; b.mkdir()
+            Fixture(b, [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+                    write_histories=False).run()
+            a = Path(tmp) / "after"; a.mkdir()
+            Fixture(a, [], [(ISSUANCE, ROUND, MEMBER, "ISSUED")]).run()
+            proc = subprocess.run(
+                [sys.executable, str(CLI), "--diff",
+                 str(b / "report.json"), str(a / "report.json")],
+                capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ORPHAN", proc.stdout)
+        self.assertIn("비교 불가", proc.stdout)
+        self.assertNotIn("신규 1", proc.stdout)
+
     def test_회차가_다르면_키_단위로_비교하지_않는다(self):
         with tempfile.TemporaryDirectory() as tmp:
             a = self._report(tmp, "a", [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
@@ -606,9 +648,9 @@ class ReconcileTest(unittest.TestCase):
                 subprocess.run([sys.executable, str(CLI), str(f.dir)],
                                capture_output=True, text=True)
             written = sorted(f.dir.glob("reconcile-*.json"))
-        # 같은 초에 두 번 돌면 이름이 겹친다. 그때는 --out 으로 이름을 준다는 것을
-        # 여기서 못 박는다 — 겹치면 하나만 남는 것이 사실이다.
-        self.assertGreaterEqual(len(written), 1)
+        # **같은 초에 두 번 돌아도 둘 다 남아야 한다.** 덮어쓰지 않겠다는 것이
+        # 이 기능의 약속이고, 초 단위 이름은 그 약속을 그 자리에서 깬다.
+        self.assertEqual(len(written), 2, [p.name for p in written])
         self.assertTrue(all(p.name.startswith("reconcile-") for p in written))
 
 

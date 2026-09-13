@@ -390,19 +390,8 @@ def reconcile(rep: Path):
         completeness["histories"] = "PARTIAL"
         problems.append(str(e))
 
-    judged = {t for t in ALL_TYPES
-              if all(t not in types or completeness[src] == "COMPLETE"
-                     for src, types in NEEDS.items())}
-    findings = judge(records, issuances, histories, idem, target_round, judged)
-
-    counts = {t: 0 for t in sorted(judged)}
-    for f in findings:
-        counts[f["type"]] += 1
-
     # **기록기 자체를 잰다.** measure_attempts 는 k6 가 프로세스 안에서 센 측정 시도
     # 수이고, REQ 줄 수와 **같아야 한다** — 둘 다 measure() 한 번에 하나씩 는다.
-    # 어긋나면 기록이 짧다는 뜻이고, 그러면 유실·미해결 집계가 그만큼 모자라다.
-    # 잘못 잰 수가 안 잰 것보다 나쁘므로 그 사실을 반드시 적는다.
     dropped, attempts = 0, None
     summary = rep / "k6-summary.json"
     if summary.exists():
@@ -415,7 +404,22 @@ def reconcile(rep: Path):
             and recorded != attempts:
         problems.append(
             f"k6 는 측정 시도를 {attempts}건으로 셌는데 기록은 {recorded}건이다"
-            " — 기록 파일이 짧다. 유실·미해결 집계가 그만큼 모자라다")
+            " — 기록이 온전하지 않다")
+        # **적기만 하고 넘어가지 않는다.** 기록이 짧으면 빠진 키가 애초에 없던 것처럼
+        # 보여, 결함 0 인 보고서가 종료코드 0 으로 나간다. 잘린 덤프를 빈 덤프로 읽지
+        # 않는 것과 같은 이유다. 몇 건까지 봐 줄지는 안 재 봤고, **안 잰 임계값을
+        # 박는 대신 어긋나면 판정하지 않는다.**
+        completeness["records"] = "PARTIAL"
+        records = {}
+
+    judged = {t for t in ALL_TYPES
+              if all(t not in types or completeness[src] == "COMPLETE"
+                     for src, types in NEEDS.items())}
+    findings = judge(records, issuances, histories, idem, target_round, judged)
+
+    counts = {t: 0 for t in sorted(judged)}
+    for f in findings:
+        counts[f["type"]] += 1
 
     return {
         "schema": SCHEMA,
@@ -498,17 +502,23 @@ def diff(before, after):
     아무 뜻이 없다.
     """
     same = before["input"]["target_round_id"] == after["input"]["target_round_id"]
+    # 한쪽에서 판정하지 못한 유형은 **비교할 수 없다.** 그쪽 목록이 비어 있는 것은
+    # "없다" 가 아니라 "모른다" 인데, 집합으로 빼면 전부 신규나 해소로 나온다 —
+    # 아무 일도 안 일어났는데 변화가 있었던 것처럼 보인다.
+    unjudged = set(before.get("unjudged", [])) | set(after.get("unjudged", []))
     out = {"schema": SCHEMA, "per_key": same,
            "before": before["generated_at"], "after": after["generated_at"],
-           "by_type": {}}
-    types = sorted(set(before["counts"]) | set(after["counts"]))
+           "not_comparable": sorted(unjudged), "by_type": {}}
+    types = sorted(set(before["counts"]) | set(after["counts"]) | unjudged)
     for t in types:
         entry = {"before": before["counts"].get(t), "after": after["counts"].get(t)}
-        if same:
+        if same and t not in unjudged:
             b = {f["key"] for f in before["findings"] if f["type"] == t}
             a = {f["key"] for f in after["findings"] if f["type"] == t}
-            entry.update(residual=sorted(b & a), new=sorted(a - b),
+            entry.update(comparable=True, residual=sorted(b & a), new=sorted(a - b),
                          cleared=sorted(b - a))
+        else:
+            entry["comparable"] = False
         out["by_type"][t] = entry
     return out
 
@@ -518,14 +528,28 @@ def print_diff(out):
         print("⚠️ 회차가 다르다. 유형별 집계만 비교한다 — 키 단위 비교는 뜻이 없다")
     print(f"{out['before']}  →  {out['after']}")
     for t, e in out["by_type"].items():
-        if not e["before"] and not e["after"]:
+        blank = not e["before"] and not e["after"]
+        if blank and t not in out["not_comparable"]:
             continue
         line = f"  {t:24s} {e['before']} → {e['after']}"
-        if out["per_key"]:
+        if e["comparable"]:
             line += (f"   잔여 {len(e['residual'])} ·"
                      f" 신규 {len(e['new'])} · 해소 {len(e['cleared'])}")
+        elif t in out["not_comparable"]:
+            line += "   비교 불가 — 한쪽이 이 유형을 판정하지 못했다"
         print(line)
     return 0
+
+
+def unused_path(rep: Path, generated_at: str):
+    """아직 없는 이름. 같은 초에 두 번 돌아도 앞 결과를 안 지운다."""
+    stamp = generated_at.replace(":", "").replace("-", "")
+    candidate = rep / f"reconcile-{stamp}.json"
+    n = 2
+    while candidate.exists():
+        candidate = rep / f"reconcile-{stamp}-{n}.json"
+        n += 1
+    return candidate
 
 
 def main():
@@ -548,8 +572,10 @@ def main():
     report = reconcile(rep)
     # 실행별로 남기고 **덮어쓰지 않는다.** 덮어쓰면 "다시 대조했더니 해소됐다" 를
     # 보여 줄 상대가 사라진다 — 그 비교가 늦은 등록과 진짜 유실을 가르는 유일한 수단이다.
-    out = Path(args.out) if args.out else rep / (
-        "reconcile-" + report["generated_at"].replace(":", "").replace("-", "") + ".json")
+    # 이름이 초 단위라 **같은 초에 두 번 돌면 앞 결과가 사라진다** — 덮어쓰지 않겠다는
+    # 약속이 그 자리에서 깨진다. 비어 있는 이름을 찾을 때까지 뒤에 번호를 붙인다.
+    # 마이크로초를 안 쓰는 이유는 이 이름을 사람이 읽고 고르기 때문이다.
+    out = Path(args.out) if args.out else unused_path(rep, report["generated_at"])
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     code = print_report(report)
     print(f"  → {out}")
