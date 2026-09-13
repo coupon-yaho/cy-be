@@ -669,6 +669,67 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 2)          # argparse 사용법 오류
         self.assertIn("--out 은 반복 하나일 때만", proc.stderr)
 
+    # ── 최신 보고서 고르기 (CY-965) ──────────────────────────────────
+
+    def test_같은_초의_보고서는_접미사_번호로_가른다(self):
+        # **사전순으로 고르면 틀린다** — '-'(0x2D) < '.'(0x2E) 라 `-2` 가 접미사 없는
+        # 것보다 앞서고, `-10` 은 `-2` 보다도 앞선다(문자열 비교).
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            same = "2026-09-13T03:45:12+00:00"
+            for name, mark in (("reconcile-20260913T034512+0000.json", "첫째"),
+                               ("reconcile-20260913T034512+0000-2.json", "둘째"),
+                               ("reconcile-20260913T034512+0000-10.json", "열째")):
+                (d / name).write_text(json.dumps({"generated_at": same, "mark": mark}))
+            self.assertEqual(reconcile_mod.latest_report(d)["mark"], "열째")
+            self.assertEqual(
+                [p.name for p in reconcile_mod.report_paths(d)],
+                ["reconcile-20260913T034512+0000.json",
+                 "reconcile-20260913T034512+0000-2.json",
+                 "reconcile-20260913T034512+0000-10.json"])
+
+    def test_시각이_다르면_시각으로_고른다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "reconcile-20260913T034512+0000-9.json").write_text(
+                json.dumps({"generated_at": "2026-09-13T03:45:12+00:00", "mark": "이른"}))
+            (d / "reconcile-20260913T034513+0000.json").write_text(
+                json.dumps({"generated_at": "2026-09-13T03:45:13+00:00", "mark": "늦은"}))
+            self.assertEqual(reconcile_mod.latest_report(d)["mark"], "늦은")
+
+    def test_보고서가_없으면_None_이다(self):
+        # **"대조 안 함" 과 "대조했고 깨끗함" 은 다르다.** 빈 결과로 뭉개면 안 한 것이
+        # 깨끗한 것으로 보인다.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(reconcile_mod.latest_report(Path(tmp)))
+
+    def test_깨진_보고서를_최신으로_고르지_않는다(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "reconcile-20260913T034512+0000.json").write_text("{ 깨짐")
+            (d / "reconcile-20260913T034513+0000.json").write_text(
+                json.dumps({"generated_at": "2026-09-13T03:45:13+00:00", "mark": "멀쩡"}))
+            self.assertEqual(reconcile_mod.latest_report(d)["mark"], "멀쩡")
+
+    def test_대조가_실제로_남긴_파일도_골라낸다(self):
+        # 위 시험들은 이름을 손으로 만들었다. **진짜 대조가 낸 파일**로도 도는지 본다 —
+        # 이름 규칙이 바뀌면 손으로 만든 픽스처만 통과하는 상태가 된다.
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Fixture(tmp, [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}"])
+            for _ in range(2):
+                subprocess.run([sys.executable, str(CLI), str(f.dir)],
+                               capture_output=True, text=True)
+            paths = reconcile_mod.report_paths(f.dir)
+            latest = reconcile_mod.latest_report(f.dir)
+            # 고른 것이 정말 마지막 파일의 내용인지 본다.
+            tail = json.loads(paths[-1].read_text())
+            names = [x.name for x in paths]
+        self.assertEqual(len(paths), 2, names)
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest, tail)
+        # 접미사 붙은 쪽이 나중이다 — 사전순이면 반대로 골랐을 것이다.
+        self.assertTrue(names[-1].endswith("-2.json"), names)
+
     # ── 전후 비교 ────────────────────────────────────────────────────
 
     def _report(self, tmp, name, records, issuances=(), idem=(), round_id=ROUND):

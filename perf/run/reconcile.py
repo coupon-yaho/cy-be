@@ -551,6 +551,44 @@ def print_diff(out):
     return 0
 
 
+def report_paths(rep: Path):
+    """반복 디렉터리의 대조 보고서들을 **오래된 것부터** 낸다.
+
+    ⚠️ **파일 이름을 사전순으로 정렬하면 틀린다.** 같은 초에 두 번 돌면 뒤엣것에
+    `-2` 가 붙는데, `-`(0x2D) 가 `.`(0x2E) 보다 작아서 `…+0000-2.json` 이
+    `…+0000.json` 보다 **앞선다.** `-10` 은 `-2` 보다도 앞선다(문자열 비교).
+    실제로 정렬해 보고 확인했다.
+
+    그래서 파일을 열어 `generated_at` 을 읽고, 같은 시각이면 접미사 번호로 가른다.
+    보고서는 반복당 몇 개뿐이라 전부 열어도 싸다.
+    """
+    rows = []
+    for path in rep.glob("reconcile-*.json"):
+        stem = path.stem[len("reconcile-"):]
+        # `<시각>` 또는 `<시각>-<번호>`. 번호가 없으면 첫 번째다.
+        head, _, tail = stem.rpartition("-")
+        suffix = int(tail) if head and tail.isdigit() else 1
+        try:
+            when = json.loads(path.read_text()).get("generated_at", "")
+        except (OSError, json.JSONDecodeError):
+            # 못 읽은 보고서를 조용히 빼지 않는다. 시각을 모르니 맨 앞에 둔다 —
+            # 최신으로 잘못 골라 그 내용을 요약에 싣는 것이 더 나쁘다.
+            when = ""
+        rows.append((when, suffix, path))
+    return [r[2] for r in sorted(rows, key=lambda r: (r[0], r[1]))]
+
+
+def latest_report(rep: Path):
+    """가장 나중 대조 결과. 없으면 None — **"대조 안 함" 과 "깨끗함" 은 다르다.**"""
+    paths = report_paths(rep)
+    if not paths:
+        return None
+    try:
+        return json.loads(paths[-1].read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def unused_path(rep: Path, generated_at: str):
     """아직 없는 이름. 같은 초에 두 번 돌아도 앞 결과를 안 지운다."""
     stamp = generated_at.replace(":", "").replace("-", "")

@@ -16,11 +16,18 @@
     돌아다니는 "1120/s" 는 어느 결과에도 없는 설정값이다.
   · 반복이 하나뿐이면 중앙값을 내지 않고 그렇게 표시한다. 표본 하나로 두 변형을
     비교하면 잡음과 차이를 구분할 수 없다.
+  · 「불변식」의 OK 는 **대조까지 통과했다는 뜻이어야 한다.** 예전에는 DB 안쪽
+    검사와 전송 오류만 보고 OK 를 찍었고, 바로 옆 reconcile-*.json 이 유실을
+    잡아 놓아도 요약은 OK 였다. 대조를 안 돌린 반복은 「대조 안 함」으로 적는다 —
+    침묵하면 그것도 OK 로 읽힌다.
 """
 import json
 import statistics
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from reconcile import DEFECT, PENDING, latest_report  # noqa: E402
 
 TREND = ["med", "p(95)", "p(99)"]
 
@@ -79,6 +86,9 @@ def load_rep(d: Path):
         "issuances": rnd["db_after"]["issuances"],
         "ping_avg_ms": meta["ping_b_to_a"]["avg_ms"],
         "ping_stddev_ms": meta["ping_b_to_a"]["stddev_ms"],
+        # 대조는 **실행하지 않는다.** 요약은 DB 를 안 만지는 물건이고, 그 선을 넘으면
+        # summarize.py 가 회차 환경을 요구하게 된다. 남아 있는 보고서만 읽는다.
+        "reconcile": latest_report(d),
         "meta": meta,
     }
 
@@ -99,11 +109,55 @@ def summarize_group(reps):
     for k in keys:
         out[k] = med([r[k] for r in reps])
         out[k + "_all"] = [r[k] for r in reps]
+    out["reconcile"] = fold_reconcile(reps)
     out["over_issued_any"] = any(r["over_issued"] for r in reps)
     out["dup_members_max"] = max(r["dup_members"] for r in reps)
     out["ping_avg_ms"] = med([r["ping_avg_ms"] for r in reps])
     out["ping_stddev_max"] = max((r["ping_stddev_ms"] or 0) for r in reps)
     return out
+
+
+def fold_reconcile(reps):
+    """반복들의 대조 결과를 하나로 접는다.
+
+    **중앙값을 내지 않는다.** 유실은 분포가 아니라 집합이라, 5회 중 1회에서 3건이
+    빠졌으면 그것은 "중앙값 0" 이 아니라 "3건이 빠졌다" 다.
+
+    적용 범위도 함께 낸다. 5회 중 3회만 대조했으면 나머지 2회는 **안 본 것**이고,
+    그 사실이 안 보이면 3회의 결과가 5회의 결과로 읽힌다.
+    """
+    done = [r["reconcile"] for r in reps if r["reconcile"]]
+    counts = {}
+    unjudged = set()
+    for rep in done:
+        for name, n in rep.get("counts", {}).items():
+            if n:
+                counts[name] = counts.get(name, 0) + n
+        unjudged |= set(rep.get("unjudged", []))
+    return {"reps": len(reps), "done": len(done), "counts": counts,
+            "unjudged": sorted(unjudged)}
+
+
+def reconcile_flags(rc):
+    """「불변식」 줄에 실을 문구. 빈 목록이면 대조까지 깨끗하다는 뜻이다."""
+    if rc is None or rc["reps"] == 0:
+        return []
+    if rc["done"] == 0:
+        # **침묵하면 OK 로 읽힌다.** 안 한 것과 했고 깨끗한 것은 다르다.
+        return ["대조 안 함 — PERF_RECORD_REQUESTS 를 켜고 perf/run/reconcile.sh 를 부른다"]
+    flags = []
+    if rc["done"] < rc["reps"]:
+        flags.append(f"대조 {rc['reps']}회 중 {rc['done']}회만 함")
+    defects = {k: v for k, v in rc["counts"].items() if k in DEFECT}
+    pending = {k: v for k, v in rc["counts"].items() if k in PENDING}
+    if defects:
+        flags.append("대조 결함 " + " · ".join(f"{k} {v}" for k, v in sorted(defects.items())))
+    if rc["unjudged"]:
+        flags.append(f"대조 판정 불가 {len(rc['unjudged'])}유형")
+    if pending:
+        flags.append("대조 보류 " + " · ".join(f"{k} {v}" for k, v in sorted(pending.items()))
+                     + " — 복구 뒤 다시 대조한다")
+    return flags
 
 
 def load_run(run_dir: Path):
@@ -121,7 +175,10 @@ def load_run(run_dir: Path):
             g = {"n": 0, "excluded": len(found), "engine": None,
                  "configured_rps": None, "configured_requests": None,
                  "over_issued_any": False, "dup_members_max": 0,
-                 "ping_avg_ms": None, "ping_stddev_max": None}
+                 "ping_avg_ms": None, "ping_stddev_max": None,
+                 # 반복이 전부 깨졌으면 대조도 볼 것이 없다. None 은 "칸이 없다" 는
+                 # 뜻이고, 위의 "대조 안 함" 과 다르다 — 그쪽은 회차는 돌았다는 말이다.
+                 "reconcile": None}
             for k in TREND_KEYS:
                 g[k] = None
                 g[k + "_all"] = []
@@ -194,6 +251,9 @@ def print_run(run_dir: Path, groups):
             flags.append(f"기타 전송 오류 {int(g['transport_errors'])}건")
         if g["n"] == 0:
             flags.append(f"유효 반복 없음 — {g['excluded']}개 시도가 전부 실패했다")
+        # **OK 는 대조까지 통과했다는 뜻이어야 한다.** 예전에는 여기서 대조를 안 봐서,
+        # 옆 디렉터리의 보고서가 유실을 잡아 놓아도 요약이 OK 를 찍었다.
+        flags += reconcile_flags(g.get("reconcile"))
         print(f"     {name}: {'· '.join(flags) if flags else 'OK'}")
         print(f"        반복별 성공med = {[fmt(v,2) for v in g['success_med_all']]}")
         print(f"        ping avg {fmt(g['ping_avg_ms'],2)}ms · stddev 최대 {fmt(g['ping_stddev_max'],2)}ms")
