@@ -66,6 +66,18 @@ DEFECT = (
     "DUPLICATE_TARGET",      # 한 대상에 발급이 둘 이상 — uk_coupon_member 가 깨졌다
     "UNATTRIBUTABLE",        # 이 발급을 어느 접수 키에 붙일지 정할 수 없다
     "DANGLING_IDEM",         # 멱등이 완료라는데 그 발급이 없다
+    # ── 두 번째 멱등 구간(서버→외부). 여기부터는 **DB 안의 두 테이블끼리** 맞댄다.
+    #
+    # 첫 구간은 「k6 독립 기록 ↔ DB」였다. 서버→외부는 하네스가 아예 못 보므로
+    # 맞댈 독립 기록이 없고, 대신 발급 ↔ 알림을 **양방향**으로 본다(명세 §6.2).
+    #
+    # ⚠️ 중복 쪽은 여기서 안 센다. uk_notifications_issuance_channel 과
+    #    uk_notification_outbox_attempt 가 DB 에서 막는다 — 외부 키가
+    #    (notification_id, attempt_seq) 그 자체라 충돌은 구조상 불가능하다.
+    "NOTIFICATION_MISSING",  # 발급은 있는데 알림이 없다
+    "OUTBOX_MISSING",        # 알림은 있는데 아웃박스가 없다 — 트랜잭션이 반만 들어갔다
+    "NOTIFICATION_TARGET_MISMATCH",  # 알림의 대상(회차·회원)이 그 발급과 다르다
+    "NOTIFICATION_ORPHAN",   # 알림이 있는데 그 발급이 대상 회차에 없다
 )
 PENDING = (
     "INCOMPLETE",   # 서버가 접수 키를 잡아만 두고 결론을 못 냈다 (IN_PROGRESS)
@@ -73,12 +85,24 @@ PENDING = (
 )
 ALL_TYPES = CLEAN + DEFECT + PENDING
 
+# 두 번째 멱등 구간의 판정들. 게이트가 첫 구간과 달라 따로 묶어 둔다.
+NOTIFICATION_TYPES = ("NOTIFICATION_MISSING", "OUTBOX_MISSING",
+                      "NOTIFICATION_TARGET_MISMATCH", "NOTIFICATION_ORPHAN")
+
+# 알림을 만드는 것은 발급이 성립했을 때뿐이다. 취소·사용으로 상태가 변한 뒤에도
+# 알림은 남아 있으므로, "알림이 있어야 한다" 의 조건은 **발급 행의 존재**이지
+# 상태가 아니다. 상태로 거르면 늦게 취소된 건이 알림 고아로 잡힌다.
+NOTIFICATION_OUTBOX_INITIAL = ("1", "INITIAL")
+
 # 판정에 무엇이 필요한가. 그 입력이 불완전하면 그 유형은 판정하지 않는다.
 #
 # ⚠️ "대상 0이면 판정 불가" 로 뭉뚱그리지 않는다. 발급 덤프만 깨졌으면 멱등 쪽 판정은
 #    여전히 유효하고, 그것까지 버리면 진짜 검출을 가드가 덮는다.
 NEEDS = {
-    "issuances": tuple(t for t in ALL_TYPES if t != "INCOMPLETE"),
+    # OUTBOX_MISSING 은 여기서 뺀다. 알림 ↔ 아웃박스만 보므로 발급 덤프가
+    # 깨져도 판정할 수 있고, 넣어 두면 그 경우에 진짜 결함이 조용히 사라진다.
+    "issuances": tuple(t for t in ALL_TYPES
+                       if t not in ("INCOMPLETE", "OUTBOX_MISSING")),
     # 내용을 안 담은 기록(옛 형식)으로는 이 축을 판정할 수 없다. 없는 값을 "맞다" 로
     # 세는 것이 이 도구가 가장 하면 안 되는 일이다.
     "content": ("CONTENT_MISMATCH",),
@@ -87,7 +111,12 @@ NEEDS = {
                   "TARGET_MISMATCH", "MISMATCH", "FALSE_REJECT", "RESOLVED_ISSUED",
                   "ORPHAN", "DUPLICATE", "UNATTRIBUTABLE", "UNRESOLVED"),
     "idempotency": ("INCOMPLETE", "UNRESOLVED", "DANGLING_IDEM"),
-    "records": ALL_TYPES,
+    "notifications": NOTIFICATION_TYPES,
+    # **두 번째 구간은 독립 기록을 안 쓴다.** DB 안의 두 테이블끼리 맞대므로
+    # k6 가 죽어 기록이 반쪽이어도 이 넷은 여전히 판정할 수 있다. 여기를
+    # ALL_TYPES 로 두면 기록이 깨진 반복에서 **알림 결함이 조용히 사라진다** —
+    # 가드가 진짜 검출을 덮는 바로 그 형상이다.
+    "records": tuple(t for t in ALL_TYPES if t not in NOTIFICATION_TYPES),
 }
 
 
@@ -202,7 +231,8 @@ def conclude(outcomes):
     return "NO_RESPONSE", []          # REQ 만 있고 결과 줄이 없다. 이것도 결과 불명이다
 
 
-def judge(records, issuances, histories, idem, target_round, judged):
+def judge(records, issuances, histories, idem, target_round, judged,
+          notifications=None):
     """접수 키마다 하나, 그리고 DB 쪽에서 짝이 없는 것마다 하나씩 판정을 낸다.
 
     **축이 둘이다.** 접수 키는 *"내 신청이 이 발급이 됐나"* 를 답하고, 대상(회차·회원)은
@@ -378,6 +408,63 @@ def judge(records, issuances, histories, idem, target_round, judged):
                     and rec["issuance_id"] not in by_id:
                 add("DANGLING_IDEM", key,
                     f"멱등이 완료라는데 발급 {rec['issuance_id']} 이 대상 회차에 없다")
+
+    # ── 두 번째 멱등 구간: 발급 ↔ 알림 ↔ 아웃박스 ──────────────────────
+    #
+    # 여기는 **독립 기록을 안 본다.** 서버→외부는 하네스가 못 보는 구간이라 맞댈
+    # 기록이 없고, 대신 발급과 알림을 양방향으로 센다(명세 §6.2 "양방향 대조").
+    #
+    # 정상은 발급 하나에 알림 하나, 알림 하나에 `(1, INITIAL)` 아웃박스 하나다 —
+    # NotificationRequestService.request() 가 같은 트랜잭션에서 그 둘만 넣는다.
+    if notifications is not None:
+        by_issuance = defaultdict(list)
+        for nid, n in notifications.items():
+            by_issuance[n["issuance_id"]].append(nid)
+
+        # ① 발급 → 알림. #326 의 형상이 여기서 잡힌다 (V2 가 알림을 0건 만들었다).
+        #
+        # 조건은 **발급 행의 존재**이지 상태가 아니다. 늦게 취소·사용된 건도 발급
+        # 시점에 알림이 만들어졌으므로, 상태로 거르면 그 건이 조용히 면제된다.
+        for row in sorted(issuances, key=lambda r: r["id"]):
+            if row["coupon_id"] != target_round:
+                continue
+            if not by_issuance.get(row["id"]):
+                add("NOTIFICATION_MISSING", f"발급:{row['id']}",
+                    f"발급 {row['id']} 이 {row['status']} 인데 알림이 없다",
+                    round=row["coupon_id"], member=row["member_id"])
+
+        # ② 알림 → 발급. 고아·대상·아웃박스를 본다.
+        for nid, n in sorted(notifications.items()):
+            row = by_id.get(n["issuance_id"])
+            if row is None:
+                # 고아가 **실제로 가능한 상태**다. 알림 세 테이블에 외래 키가 하나도
+                # 없다 — 마이그레이션을 mysql:8.4 에 그대로 적용하고
+                # information_schema.KEY_COLUMN_USAGE 로 확인했다. 이름이 아니라
+                # 스키마를 보고 적은 것이다.
+                add("NOTIFICATION_ORPHAN", f"알림:{nid}",
+                    f"알림이 가리키는 발급 {n['issuance_id']} 이 덤프에 없다",
+                    round=n["coupon_id"], member=n["member_id"])
+            elif (n["coupon_id"], n["member_id"]) \
+                    != (row["coupon_id"], row["member_id"]):
+                add("NOTIFICATION_TARGET_MISMATCH", f"알림:{nid}",
+                    f"알림은 {n['coupon_id']}/{n['member_id']} 인데"
+                    f" 발급 {row['id']} 은 {row['coupon_id']}/{row['member_id']} 다",
+                    round=n["coupon_id"], member=n["member_id"])
+
+            # **elif 로 잇지 않는다.** 고아이면서 아웃박스도 없는 알림은 서로 다른
+            # 사실 둘이고, 이어 붙이면 앞 갈래가 뒤를 삼킨다. 게이트가 달라서도
+            # 그렇다 — 발급 덤프가 깨지면 위 둘은 판정이 눌리는데 이 검사는 산다.
+            #
+            # 있어야 할 행이 **있는지**만 본다. 여분의 행(수동 재처리의 2회차)은
+            # 결함이 아니다 — 없는 것만 결함이다.
+            if not any(seq == NOTIFICATION_OUTBOX_INITIAL[0]
+                       and trigger == NOTIFICATION_OUTBOX_INITIAL[1]
+                       for seq, trigger, _ in n["outbox"]):
+                add("OUTBOX_MISSING", f"알림:{nid}",
+                    "아웃박스가 아예 없다" if not n["outbox"]
+                    else f"(1, INITIAL) 아웃박스가 없다 — 있는 것은 "
+                         f"{sorted((s, t) for s, t, _ in n['outbox'])}",
+                    round=n["coupon_id"], member=n["member_id"])
     return findings
 
 
@@ -448,6 +535,22 @@ def reconcile(rep: Path):
         completeness["histories"] = "PARTIAL"
         problems.append(str(e))
 
+    try:
+        # 알림 하나에 아웃박스가 여럿일 수 있어(수동 재처리) 줄이 여럿 나온다.
+        # 알림 id 로 묶고 아웃박스는 (회차번호, 종류) 쌍의 집합으로 들고 있는다.
+        notifications = {}
+        for r in read_tsv(rep / "db-notifications.tsv", 8):
+            n = notifications.setdefault(r[0], {
+                "issuance_id": r[1], "coupon_id": r[2], "member_id": r[3],
+                "status": r[4], "outbox": set()})
+            if r[5]:                      # LEFT JOIN 이라 아웃박스가 없으면 빈 칸이다
+                n["outbox"].add((r[5], r[6], r[7]))
+        completeness["notifications"] = "COMPLETE"
+    except Incomplete as e:
+        notifications = None
+        completeness["notifications"] = "PARTIAL"
+        problems.append(str(e))
+
     # **기록기 자체를 잰다.** measure_attempts 는 k6 가 프로세스 안에서 센 측정 시도
     # 수이고, REQ 줄 수와 **같아야 한다** — 둘 다 measure() 한 번에 하나씩 는다.
     dropped, attempts, retries = 0, None, 0
@@ -498,7 +601,8 @@ def reconcile(rep: Path):
     judged = {t for t in ALL_TYPES
               if all(t not in types or completeness[src] == "COMPLETE"
                      for src, types in NEEDS.items())}
-    findings = judge(records, issuances, histories, idem, target_round, judged)
+    findings = judge(records, issuances, histories, idem, target_round, judged,
+                     notifications)
 
     counts = {t: 0 for t in sorted(judged)}
     for f in findings:

@@ -81,9 +81,13 @@ for REP in "${REPS[@]}"; do
   fi
   if [[ -n "$REPORTED" ]]; then
     ID_CLAUSE=" OR i.id IN ($REPORTED)"
+    # 같은 번호 목록을 알림 쪽에서도 쓴다. 알림 덤프는 `issuances` 를 조인하지
+    # 않으므로 컬럼 이름이 다르다 — 한 변수를 치환해 쓰면 읽는 쪽이 못 알아본다.
+    NOTIFY_ID_CLAUSE=" OR n.issuance_id IN ($REPORTED)"
     log "성공 응답이 알려 준 예약번호 $(awk -F, '{print NF}' <<<"$REPORTED")개로 회차 밖도 짚는다"
   else
     ID_CLAUSE=""
+    NOTIFY_ID_CLAUSE=""
   fi
 
   log "대상 회차 $ROUND 의 발급을 읽는다"
@@ -144,6 +148,29 @@ for REP in "${REPS[@]}"; do
       rm -f "$REP/db-idempotency.tsv"
     fi
   fi
+
+  # 두 번째 멱등 구간(서버→외부). 발급마다 알림 1건 + 아웃박스 1건이 같은
+  # 트랜잭션으로 들어간다 — NotificationRequestService.request() 가 그 둘뿐이다.
+  #
+  # **회차 축을 notifications.coupon_id 로 잡는다.** 발급에 조인해서 거르면
+  # 대응 발급이 없는 알림(고아)이 덤프에 아예 안 나와서 **검출이 사라진다.**
+  # 그 컬럼은 스키마 주석이 "회차(coupons.id) 요약 집계 축" 이라고 적어 둔 것이다.
+  #
+  # LEFT JOIN 이다. 아웃박스가 없는 알림이 **이 대조가 찾는 결함 중 하나**라
+  # INNER 로 묶으면 그 행이 사라진다. 아웃박스가 여럿인 알림(수동 재처리)은
+  # 줄이 여럿 나오고, 묶는 것은 파이썬이 한다.
+  #
+  # ⚠️ 더미 발급 30만 건은 회차 9000(PERF_DUMMY_ROUND_ID)이고 대상 회차는
+  #    1000001 이상이라 여기 안 걸린다. 겹치면 알림 없는 발급 30만 건이
+  #    거짓 결함으로 쏟아진다.
+  log "회차 $ROUND 의 알림과 아웃박스를 읽는다 (두 번째 멱등 구간)"
+  dump db-notifications.tsv "
+    SELECT n.id, n.issuance_id, n.coupon_id, n.member_id, n.status,
+           IFNULL(o.attempt_seq, ''), IFNULL(o.trigger, ''), IFNULL(o.status, '')
+    FROM notifications n
+    LEFT JOIN notification_outbox o ON o.notification_id = n.id
+    WHERE n.coupon_id = $ROUND$NOTIFY_ID_CLAUSE
+    ORDER BY n.id, o.attempt_seq;"
 done
 
 # 반복을 전부 넘긴다. 하나가 결함이어도 나머지를 판정하고, 종료코드는 가장 나쁜 것이다.

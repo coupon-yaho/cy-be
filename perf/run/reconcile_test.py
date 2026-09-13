@@ -68,6 +68,26 @@ def derive_histories(records, issuances):
             for iid, cid, mid, _status, _content in issuances]
 
 
+# 알림 id 는 발급 id 와 **겹치지 않게** 띄운다. 같은 수를 쓰면 둘을 맞바꾼
+# 코드가 시험을 그대로 통과한다 — 생성자 인자 순서를 착각해 값이 맞아 보였던
+# 일이 이미 한 번 있었다.
+NOTIFICATION_ID_BASE = 500000
+
+
+def derive_notifications(issuances):
+    """발급마다 알림 하나 + `(1, INITIAL, PENDING)` 아웃박스 하나.
+
+    **기본값이 런타임에 가능한 형상이어야 한다.** request() 가 발급 트랜잭션
+    안에서 딱 그 둘을 넣으므로, 알림 없는 발급을 기본값으로 두면 멀쩡한 회차가
+    전부 NOTIFICATION_MISSING 으로 빨개진다.
+
+    릴레이는 부하 회차에서 꺼져 있어(PERF_BATCH_SCHEDULING_ENABLED=false) 상태가
+    둘 다 PENDING 에서 멈춘다. 그것이 정지 상태의 정상이다.
+    """
+    return [(iid + NOTIFICATION_ID_BASE, iid, cid, mid, "PENDING", 1, "INITIAL", "PENDING")
+            for iid, cid, mid, _status, _content in issuances]
+
+
 def foreign_key(issuance_id):
     """우리가 보낸 적 없는 접수 키. UUID 모양이어야 런타임에 가능한 값이다."""
     return f"00000000-0000-4000-8000-{issuance_id:012d}"
@@ -80,7 +100,8 @@ class Fixture:
                  configured=1, dropped=0, round_id=ROUND,
                  write_issuances=True, write_idem=True, marker=True,
                  measure_attempts=None, measure_retries=None,
-                 histories=None, write_histories=True):
+                 histories=None, write_histories=True,
+                 notifications=None, write_notifications=True):
         self.dir = Path(tmp)
         (self.dir / "round.json").write_text(json.dumps({
             "engine": "V2", "target_round_id": round_id,
@@ -112,6 +133,10 @@ class Fixture:
             (self.dir / "db-histories.tsv").write_text(
                 tsv(derive_histories(records, issuances)
                     if histories is None else histories))
+        if write_notifications:
+            (self.dir / "db-notifications.tsv").write_text(
+                tsv(derive_notifications(issuances)
+                    if notifications is None else notifications))
 
     def run(self):
         out = self.dir / "report.json"
@@ -1128,6 +1153,155 @@ class ReconcileTest(unittest.TestCase):
                 capture_output=True, text=True)
         self.assertIn("회차가 다르다", proc.stdout)
         self.assertNotIn("잔여", proc.stdout)
+
+    # ── 두 번째 멱등 구간 (CY-974) ───────────────────────────────────
+    #
+    # 여기 시험은 **독립 기록을 안 흔든다.** 이 구간은 DB 안의 두 테이블끼리
+    # 맞대는 것이라, 기록을 건드리면 무엇이 판정을 눌렀는지 흐려진다.
+
+    def sent(self, key=KEY, member=MEMBER, iid=1):
+        """성공 응답 한 건과 그 발급. 이 구간의 시험은 전부 여기서 출발한다."""
+        return ([f"CY960\tREQ\t{key}\t{ROUND}\t{member}\t{GRADE}",
+                 f"CY960\tOK\t{key}\t{iid}"],
+                [issuance(iid, ROUND, member, "ISSUED")])
+
+    def test_발급마다_알림과_아웃박스가_있으면_정상이다(self):
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.types(report), {"MATCHED": 1})
+        # **판정 불가로 빠져서 초록인 것이 아니어야 한다.** 넷이 실제로 판정됐다.
+        self.assertEqual(report["unjudged"], [])
+
+    def test_발급이_있는데_알림이_없으면_결함이다(self):
+        """#326 의 형상. V2 회차가 알림을 한 건도 안 만들고 있었다."""
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances, notifications=[])
+        self.assertEqual(code, 1)
+        self.assertEqual(self.types(report),
+                         {"MATCHED": 1, "NOTIFICATION_MISSING": 1})
+
+    def test_늦게_취소된_발급도_알림이_있어야_한다(self):
+        """조건은 **발급 행의 존재**이지 상태가 아니다.
+
+        알림은 발급 시점에 만들어진다. 상태로 거르면 그 뒤에 취소·사용된 건이
+        조용히 면제되고, 그 회차의 알림 누락이 안 보인다.
+        """
+        records, _ = self.sent()
+        code, report, _ = self.check(
+            records, [issuance(1, ROUND, MEMBER, "CANCELED")], notifications=[])
+        self.assertEqual(code, 1)
+        self.assertEqual(report["counts"]["NOTIFICATION_MISSING"], 1)
+
+    def test_다른_회차의_발급은_알림을_안_따진다(self):
+        """예약번호로 끌어온 회차 밖 발급까지 여기서 세면 안 된다.
+
+        그 건의 결함은 첫 구간이 TARGET_MISMATCH 로 이미 보고한다 — 같은 행을
+        두 이름으로 두 번 세면 다음 사람이 결함을 두 배로 읽는다.
+        """
+        records, issuances = self.sent()
+        code, report, _ = self.check(
+            records, issuances + [issuance(9, ROUND + 1, MEMBER + 1, "ISSUED")],
+            notifications=derive_notifications(issuances))
+        self.assertEqual(report["counts"]["NOTIFICATION_MISSING"], 0)
+
+    def test_알림은_있는데_아웃박스가_없으면_결함이다(self):
+        """트랜잭션이 반만 들어간 꼴. 외부로 나갈 길이 아예 없다."""
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances, notifications=[
+            (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER, "PENDING", "", "", "")])
+        self.assertEqual(code, 1)
+        self.assertEqual(report["counts"]["OUTBOX_MISSING"], 1)
+        self.assertIn("아웃박스가 아예 없다",
+                      [f["detail"] for f in report["findings"]])
+
+    def test_첫_회차_아웃박스가_없으면_결함이다(self):
+        """외부 키의 뒷자리가 attempt_seq 다. `(1, INITIAL)` 이 그 시작이고,
+        그것 없이 2회차만 있으면 시작을 건너뛴 것이다."""
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances, notifications=[
+            (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER, "PENDING",
+             2, "MANUAL", "PENDING")])
+        self.assertEqual(code, 1)
+        self.assertEqual(report["counts"]["OUTBOX_MISSING"], 1)
+
+    def test_수동_재처리로_아웃박스가_둘이어도_정상이다(self):
+        """**여분은 결함이 아니다.** 승인된 재처리는 새 회차를 정당하게 만든다 —
+        없는 것만 결함이라고 못 박아 두지 않으면 정상 운영이 빨개진다."""
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances, notifications=[
+            (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER, "SENT",
+             1, "INITIAL", "PUBLISHED"),
+            (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER, "SENT",
+             2, "MANUAL", "PENDING")])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.types(report), {"MATCHED": 1})
+
+    def test_알림의_대상이_발급과_다르면_결함이다(self):
+        """알림이 엉뚱한 사람에게 간다. 발급은 멀쩡해서 첫 구간은 아무 말도 안 한다."""
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances, notifications=[
+            (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER + 7, "PENDING",
+             1, "INITIAL", "PENDING")])
+        self.assertEqual(code, 1)
+        self.assertEqual(self.types(report),
+                         {"MATCHED": 1, "NOTIFICATION_TARGET_MISMATCH": 1})
+
+    def test_알림이_가리키는_발급이_없으면_고아다(self):
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances, notifications=[
+            (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER, "PENDING",
+             1, "INITIAL", "PENDING"),
+            (2 + NOTIFICATION_ID_BASE, 777, ROUND, MEMBER + 1, "PENDING",
+             1, "INITIAL", "PENDING")])
+        self.assertEqual(code, 1)
+        self.assertEqual(report["counts"]["NOTIFICATION_ORPHAN"], 1)
+
+    def test_고아이면서_아웃박스도_없으면_둘_다_센다(self):
+        """**서로 다른 사실 둘이다.** elif 로 이으면 앞 갈래가 뒤를 삼킨다."""
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances, notifications=[
+            (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER, "PENDING",
+             1, "INITIAL", "PENDING"),
+            (2 + NOTIFICATION_ID_BASE, 777, ROUND, MEMBER + 1, "PENDING",
+             "", "", "")])
+        self.assertEqual(report["counts"]["NOTIFICATION_ORPHAN"], 1)
+        self.assertEqual(report["counts"]["OUTBOX_MISSING"], 1)
+
+    def test_알림_덤프가_없으면_그_넷만_판정_불가다(self):
+        """첫 구간의 판정은 살아 있어야 한다. 한 덤프가 빠졌다고 전부
+        판정 불가로 내리면 **가드가 진짜 검출을 덮는다.**"""
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances,
+                                     write_notifications=False)
+        self.assertEqual(code, 3)
+        self.assertEqual(set(report["unjudged"]),
+                         set(reconcile_mod.NOTIFICATION_TYPES))
+        self.assertEqual(report["counts"]["MATCHED"], 1)
+
+    def test_기록이_깨져도_알림_판정은_산다(self):
+        """이 구간은 독립 기록을 안 쓴다. k6 가 죽은 반복에서도 알림 결함은
+        여전히 보여야 한다 — 여기를 기록에 매어 두면 조용히 사라진다."""
+        records, issuances = self.sent()
+        code, report, _ = self.check(records, issuances, notifications=[],
+                                     measure_attempts=99)
+        # 기록이 어긋나 첫 구간은 판정을 멈췄는데
+        self.assertEqual(report["completeness"]["records"], "PARTIAL")
+        self.assertNotIn("MATCHED", report["counts"])
+        # 알림 누락은 그대로 잡힌다
+        self.assertEqual(report["counts"]["NOTIFICATION_MISSING"], 1)
+        self.assertEqual(code, 1)
+
+    def test_발급_덤프가_깨져도_아웃박스_누락은_잡는다(self):
+        """OUTBOX_MISSING 은 알림 ↔ 아웃박스만 본다. 발급 덤프에 매어 두면
+        발급 조회가 실패한 회차에서 이 결함이 통째로 사라진다."""
+        records, issuances = self.sent()
+        code, report, _ = self.check(
+            records, issuances, write_issuances=False, notifications=[
+                (1 + NOTIFICATION_ID_BASE, 1, ROUND, MEMBER, "PENDING",
+                 "", "", "")])
+        self.assertEqual(report["counts"]["OUTBOX_MISSING"], 1)
+        self.assertIn("NOTIFICATION_MISSING", report["unjudged"])
 
     # ── 덮어쓰지 않는다 ──────────────────────────────────────────────
 
