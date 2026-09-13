@@ -253,6 +253,29 @@ def judge(records, issuances, histories, idem, target_round, judged):
             continue
         row = mine[0] if mine else None
 
+        # ── 대상·내용은 **결과와 무관하게** 본다 ────────────────────────────
+        #
+        # 내 접수 키의 발급이 잡혔으면, 그것이 내가 요청한 대상·내용인지는 응답을
+        # 받았든 잃었든 똑같이 물어야 하는 질문이다. 예전에는 이 둘이 `OK` 갈래
+        # 안에만 있어서, **응답을 잃은 건은 내용이 달라도 `RESOLVED_ISSUED`(정상)로
+        # 나갔다** — 실측으로 재현했다(VIP 요청 · BASIC 저장 · 종료코드 0).
+        #
+        # ⚠️ `wrong_content` 는 내용을 모르면 거짓을 낸다. 그래야 그 유형이
+        #    `unjudged` 일 때 이 `continue` 가 기록을 통째로 삼키지 않는다.
+        if row is not None and (row["coupon_id"], row["member_id"]) != (rnd, member):
+            add("TARGET_MISMATCH", key,
+                f"내 접수 키의 발급 {row['id']} 이"
+                f" 회차 {row['coupon_id']} · 회원 {row['member_id']} 앞으로 있다",
+                **common)
+            continue
+        if row is not None and wrong_content(entry, row):
+            # **대상은 맞는데 내용이 다르다.** MISMATCH 와 원인이 다르다 —
+            # 그쪽은 응답과 저장의 어긋남이고 이쪽은 **요청과 저장**의 어긋남이다.
+            add("CONTENT_MISMATCH", key,
+                f"요청한 내용 {sorted(entry['contents'])} · DB 의 발급"
+                f" {row['id']} 은 {row['content']}", **common)
+            continue
+
         if kind == "OK":
             if row is None and not at_target:
                 got = ", ".join(v for v in values if v) or "예약번호 없음"
@@ -263,18 +286,6 @@ def judge(records, issuances, histories, idem, target_round, judged):
                 add("KEY_MISMATCH", key,
                     f"발급 {[r['id'] for r in at_target]} 이 그 대상에 있는데"
                     " 내 접수 키로 만들어진 것이 아니다", **common)
-            elif (row["coupon_id"], row["member_id"]) != (rnd, member):
-                add("TARGET_MISMATCH", key,
-                    f"내 접수 키의 발급 {row['id']} 이"
-                    f" 회차 {row['coupon_id']} · 회원 {row['member_id']} 앞으로 있다",
-                    **common)
-            elif wrong_content(entry, row):
-                # **대상은 맞는데 내용이 다르다.** MISMATCH 와 원인이 다르다 —
-                # 그쪽은 응답과 저장의 어긋남이고 이쪽은 **요청과 저장**의 어긋남이다.
-                # 섞으면 보고서만 보고 어느 쪽인지 모른다.
-                add("CONTENT_MISMATCH", key,
-                    f"요청한 내용 {sorted(entry['contents'])} · DB 의 발급"
-                    f" {row['id']} 은 {row['content']}", **common)
             elif len({v for v in values if v}) > 1:
                 # 재전송이 서로 다른 예약번호를 받았다. 멱등이 깨졌다는 뜻이고,
                 # DB 에 한 행뿐이어도 그렇다 — 클라이언트가 받은 것이 증거다.

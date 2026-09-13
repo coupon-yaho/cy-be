@@ -415,6 +415,53 @@ class ReconcileTest(unittest.TestCase):
         self.assertIn("BASIC", report["findings"][0]["detail"])
         self.assertEqual(code, 1)
 
+    def test_응답을_잃어도_내용이_다르면_잡는다(self):
+        """**`OK` 가 없는 순수 `UNKNOWN` 이다.**
+
+        예전에는 대상·내용 검사가 `OK` 갈래 안에만 있어서, 응답을 잃은 건은 내용이
+        달라도 `RESOLVED_ISSUED`(정상, 종료 0)로 나갔다 — 실측으로 재현했다.
+        내 키의 발급이 내가 요청한 내용인지는 **응답을 받았든 잃었든 같은 질문**이다.
+        """
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+             f"CY960\tUNKNOWN\t{KEY}\t1050"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED", content="BASIC")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"CONTENT_MISMATCH": 1})
+        self.assertEqual(code, 1)
+
+    def test_응답을_잃어도_대상이_다르면_잡는다(self):
+        # 같은 구멍이 대상 축에도 있었다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+             f"CY960\tUNKNOWN\t{KEY}\t1050"],
+            [issuance(ISSUANCE, ROUND, MEMBER + 7, "ISSUED")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"TARGET_MISMATCH": 1})
+        self.assertEqual(code, 1)
+
+    def test_응답을_잃었고_내용도_맞으면_해소다(self):
+        # 고친 뒤에도 정상 경로가 살아 있는지 본다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
+             f"CY960\tUNKNOWN\t{KEY}\t1050"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"RESOLVED_ISSUED": 1})
+        self.assertEqual(code, 0)
+
+    def test_내용을_모르면_해소를_삼키지_않는다(self):
+        # 옛 형식 기록 + 응답 유실. CONTENT_MISMATCH 가 unjudged 라 continue 가
+        # 기록을 통째로 삼키면 안 된다 — RESOLVED_ISSUED 로 가야 한다.
+        code, report, _ = self.check(
+            [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}",
+             f"CY960\tUNKNOWN\t{KEY}\t1050"],
+            [issuance(ISSUANCE, ROUND, MEMBER, "ISSUED", content="BASIC")],
+            histories=[(ISSUANCE, KEY)])
+        self.assertEqual(self.types(report), {"RESOLVED_ISSUED": 1})
+        self.assertIn("CONTENT_MISMATCH", report["unjudged"])
+        self.assertEqual(code, 3)
+
     def test_내용이_같으면_일치다(self):
         code, report, _ = self.check(
             [f"CY960\tREQ\t{KEY}\t{ROUND}\t{MEMBER}\t{GRADE}",
