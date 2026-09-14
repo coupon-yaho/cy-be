@@ -278,7 +278,9 @@ POST /coupon-rounds/{r}/issue
  │    -6 REPLAY_DONE    → DB 조회 후 저장된 응답 반환
  │    -7 REPLAY_PENDING → 409 + Retry-After. **폴링하지 않는다** (§4.8)
  │    0             → 아래로
- ├ ② [단일 TX] issuances + histories + idempotency(DONE)   커밋 1회
+ ├ ② [단일 TX] issuances + histories + idempotency(DONE)
+ │             + notifications + notification_outbox + coupon_stocks.active_count
+ │             커밋 1회 (§9.6 — 순서는 알림이 재고 점유보다 앞)
  │    성공 → **완료 CAS**(§4.4) 로 DONE 승격 → 201 + 잔여재고
  └ ③ 예외 → **커밋 여부 확인 후** 보상 (§4.9). 불확실하면 보상하지 않는다
 ```
