@@ -63,6 +63,7 @@ class V2CouponIssueServiceTest {
     private IdempotencyRepository idempotencies;
     private IdempotencyResultCodec<CouponIssueResult> codec;
     private CouponStockRepository stocks;
+    private com.kafkick.core.notification.NotificationRequestService notifications;
     private V2CouponIssueService service;
     private CouponIssueCommand command;
 
@@ -76,11 +77,60 @@ class V2CouponIssueServiceTest {
         when(stocks.occupyOne(anyLong(), any())).thenReturn(CouponStockOccupationResult.OCCUPIED);
         TransactionOperations transactions = immediateTransactions();
         CouponCodeGenerator codes = () -> "1234567890ABCDEF";
+        notifications = mock(
+                com.kafkick.core.notification.NotificationRequestService.class);
         codec = mock(IdempotencyResultCodec.class);
         when(codec.write(any())).thenReturn("{result}");
         service = new V2CouponIssueService(gate, issuances, histories, idempotencies, stocks,
-                codes, codec, new RequestTokenGenerator("api", "boot", 0L), transactions);
+                codes, codec, notifications, new RequestTokenGenerator("api", "boot", 0L),
+                transactions);
         command = new CouponIssueCommand(10L, 20L, MembershipGrade.GOLD, IDEM, ISSUED_AT);
+    }
+
+    /**
+     * v2 도 <b>발급 트랜잭션 안에서 알림을 만든다.</b>
+     *
+     * <p>안 만들고 있었다. CY-643 이 알림을 발급 경로에 붙일 때 v1 만 건드렸고, v2 는
+     * 그보다 이틀 먼저 있었는데 안 고쳤다 — 형제가 둘인데 하나만 바뀐 것이다.
+     * 회차 엔진이 v2 면 발급은 되는데 알림이 하나도 안 생겼고, 응답이 201 이라
+     * <b>화면에서는 안 보인다.</b>
+     *
+     * <p><b>재고 점유보다 앞이다.</b> v1 은 점유 뒤에 부르는데, 여기서 그러면 재고 행
+     * X-lock 을 쥔 채 INSERT 둘을 더 하게 되어 회차가 직렬화된다. 순서를 바꿔도
+     * <i>"매진으로 롤백될 발급을 알리지 않는다"</i> 는 지켜진다 — 점유가 SOLD_OUT 으로
+     * 던지면 이 트랜잭션이 통째로 롤백되면서 알림·아웃박스도 같이 사라진다.
+     */
+    @Test
+    void requestsNotificationInsideTheIssueTransactionBeforeOccupyingStock() {
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(8L));
+        when(issuances.save(any())).thenAnswer(invocation -> saved(invocation.getArgument(0)));
+        when(idempotencies.insertCompleted(any(), any(), any(), any(), any(), any()))
+                .thenReturn(true);
+        when(gate.complete(10L, 20L, TOKEN)).thenReturn(CompleteOutcome.PROMOTED);
+
+        service.issue(command, new CouponRoundIssuanceDefinition(10L, 7, EngineVersion.V2));
+
+        verify(notifications).request(any());
+        org.mockito.InOrder order = inOrder(notifications, stocks);
+        order.verify(notifications).request(any());
+        order.verify(stocks).occupyOne(10L, ISSUED_AT);
+    }
+
+    /** 매진이면 알림도 같이 사라진다 — 롤백이 지킨다. */
+    @Test
+    void doesNotKeepTheNotificationWhenStockIsSoldOut() {
+        when(gate.claim(any())).thenReturn(ClaimResult.claimed(8L));
+        when(issuances.save(any())).thenAnswer(invocation -> saved(invocation.getArgument(0)));
+        when(idempotencies.insertCompleted(any(), any(), any(), any(), any(), any()))
+                .thenReturn(true);
+        when(stocks.occupyOne(anyLong(), any())).thenReturn(CouponStockOccupationResult.SOLD_OUT);
+
+        service.issue(command, new CouponRoundIssuanceDefinition(10L, 7, EngineVersion.V2));
+
+        // 호출은 됐지만 같은 트랜잭션이라 커밋되지 않는다. 이 시험이 보는 것은
+        // **순서가 롤백 보장을 깨지 않는다**는 것 — 점유가 던지는 경로를 실제로 태운다.
+        verify(notifications).request(any());
+        verify(stocks).occupyOne(10L, ISSUED_AT);
     }
 
     @Test

@@ -88,6 +88,22 @@ class ReconcileInSummaryTest(unittest.TestCase):
         self.assertIn("LOST 3", flags[0])
         self.assertIn("ORPHAN 1", flags[0])
 
+    def test_두_번째_멱등_구간의_결함도_요약에_뜬다(self):
+        """**자동으로 흐르는 것을 단정하지 않고 잰다.**
+
+        `reconcile_flags` 는 `DEFECT` 멤버십으로 고른다. 그래서 CY-974 가 유형을
+        더한 것만으로 요약에 뜨는 것이 맞는데, 그 연결이 끊기면 판정만 나고 요약은
+        계속 초록이다 — CY-965 가 정확히 그 결함이었다.
+        """
+        flags = S.reconcile_flags(S.fold_reconcile(reps(report(
+            {"NOTIFICATION_MISSING": 7, "OUTBOX_MISSING": 1,
+             "NOTIFICATION_TARGET_MISMATCH": 1, "NOTIFICATION_ORPHAN": 2}))))
+        self.assertEqual(len(flags), 1)
+        for name, n in (("NOTIFICATION_MISSING", 7), ("OUTBOX_MISSING", 1),
+                        ("NOTIFICATION_TARGET_MISMATCH", 1),
+                        ("NOTIFICATION_ORPHAN", 2)):
+            self.assertIn(f"{name} {n}", flags[0])
+
     def test_깨끗한_유형은_문구에_안_넣는다(self):
         # MATCHED 5,000 을 결함처럼 늘어놓으면 진짜 결함이 묻힌다.
         self.assertEqual(

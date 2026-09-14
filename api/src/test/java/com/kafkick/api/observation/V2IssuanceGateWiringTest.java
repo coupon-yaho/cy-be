@@ -23,6 +23,7 @@ import com.kafkick.core.coupon.service.code.CouponCodeGenerator;
 import com.kafkick.core.coupon.service.result.CouponIssueResult;
 import com.kafkick.core.coupon.v2.V2CouponIssueService;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
+import com.kafkick.core.notification.NotificationRequestService;
 import com.kafkick.infra.redis.coupon.v2.IssuanceGateRedisAutoConfiguration;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -121,6 +122,23 @@ class V2IssuanceGateWiringTest {
                 assertThat(context).hasFailed());
     }
 
+    /**
+     * 알림 요청 서비스도 조건에 없다 — codec 과 <b>같은 이유, 다른 근거</b>다.
+     *
+     * <p>그것은 {@code core} 컴포넌트 스캔에서 나오므로, 리포지터리는 있는데 이것만 없는
+     * 컨텍스트는 storage·core 를 반쯤 얹은 것이다. 그때는 <b>조용히 빠지는 것보다 기동
+     * 실패가 낫다</b> — v2 가 조용히 안 생기면 첫 발급 요청의 500 으로만 드러난다.
+     *
+     * <p>조건에 넣는 "고침" 이 들어오면 이 테스트가 빨강이 되고, 그 순간 v2 는 알림 없이
+     * 조립될 수 있게 된다 — <b>그것이 바로 이번에 고친 결함</b>이다.
+     */
+    @Test
+    @DisplayName("알림 요청 서비스가 없으면 조용히 빠지지 않고 기동이 실패한다")
+    void failsFastWithoutNotificationRequestService() {
+        runnerWithout(NotificationRequestService.class).run(context ->
+                assertThat(context).hasFailed());
+    }
+
     /** 게이트 자동설정을 <b>뒤에</b> 놓는다 — 순서 선언이 없으면 여기서 드러난다. */
     private ApplicationContextRunner runner() {
         return runnerWithout(null);
@@ -149,7 +167,8 @@ class V2IssuanceGateWiringTest {
                 CouponStockRepository.class,
                 CouponCodeGenerator.class,
                 PlatformTransactionManager.class,
-                IdempotencyResultCodec.class)) {
+                IdempotencyResultCodec.class,
+                NotificationRequestService.class)) {
             if (required.equals(omitted)) {
                 continue;
             }

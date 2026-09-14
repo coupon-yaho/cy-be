@@ -548,6 +548,7 @@ class V2IssuanceInterleaveConcurrencyTest {
                 stocks,
                 () -> "1234567890ABCDEF",
                 resultCodec,
+                mock(com.kafkick.core.notification.NotificationRequestService.class),
                 new RequestTokenGenerator("api-s9"),
                 immediateTransactions());
     }

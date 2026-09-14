@@ -25,6 +25,11 @@ public interface NotificationSender {
      *
      * @param notification 보낼 알림
      * @param idempotencyKey 같은 논리적 발송을 가리키는 키. <b>자동 재시도 사이에 안 변한다</b>
+     *     — {@code NotificationDeliveryServiceTest} 의
+     *     {@code keepsTheSameExternalKeyAcrossAutomaticRetries} 가 못 박는다.
+     *     <b>{@code MANUAL} 재처리는 일부러 바뀐다</b>(새 논리적 발송이라 외부가 버리면 안 된다).
+     *     ⚠️ 사전예약처럼 <b>같은 건을 다시 등록</b>하는 도메인으로 옮길 때는 그 규칙이
+     *     반대다 — 키가 바뀌면 외부에 둘이 생긴다
      * @throws NullPointerException 둘 중 하나가 {@code null} 일 때
      * @throws NotificationSendException 보내지 못했을 때. {@code reason} 이 재시도 가능
      *         여부를 진다

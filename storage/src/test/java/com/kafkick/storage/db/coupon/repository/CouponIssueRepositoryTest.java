@@ -1,6 +1,7 @@
 package com.kafkick.storage.db.coupon.repository;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -64,7 +65,16 @@ import com.kafkick.core.coupon.v2.port.CompensateOutcome;
 import com.kafkick.core.coupon.v2.port.CompleteOutcome;
 import com.kafkick.core.coupon.v2.port.IssuanceGatePort;
 import com.kafkick.core.observation.EngineVersion;
+import com.kafkick.core.notification.NotificationPayload;
+import com.kafkick.core.notification.NotificationRepository;
+import com.kafkick.core.notification.NotificationOutboxRepository;
 import com.kafkick.core.notification.NotificationRequestService;
+import com.kafkick.core.notification.retry.FullJitterBackOff;
+import com.kafkick.storage.db.notification.repository.NotificationOutboxMeter;
+import com.kafkick.storage.db.notification.repository.NotificationOutboxRepositoryImpl;
+import com.kafkick.storage.db.notification.repository.NotificationRepositoryImpl;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.kafkick.core.support.exception.BusinessException;
 import com.kafkick.storage.db.LockContentionRetries;
 import com.kafkick.storage.db.RepositoryTest;
@@ -86,6 +96,10 @@ import static org.mockito.Mockito.when;
         IssuanceRepositoryImpl.class,
         IssuanceHistoryRepositoryImpl.class,
         IdempotencyRepositoryImpl.class,
+        // 알림 어댑터를 **진짜로** 붙인다. 모의로 두면 "발급과 같은 트랜잭션" 이라는
+        // 계약을 아무도 안 태운다 — 같은 클래스에 REQUIRES_NEW 메서드가 셋이나 있다.
+        NotificationRepositoryImpl.class,
+        NotificationOutboxRepositoryImpl.class,
         CouponIssueRepositoryTest.AuditTestConfig.class
 })
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -114,6 +128,12 @@ class CouponIssueRepositoryTest {
 
     @Autowired
     private IdempotencyRepository idempotencyRepository;
+
+    @Autowired
+    private NotificationRepository notificationRepository;
+
+    @Autowired
+    private NotificationOutboxRepository notificationOutboxRepository;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -345,6 +365,10 @@ class CouponIssueRepositoryTest {
         assertThat(countRows("issuances")).isEqualTo(1);
         assertThat(countRows("issuance_histories")).isEqualTo(1);
         assertThat(countRows("idempotency_records")).isEqualTo(1);
+        // 알림과 아웃박스도 **같은 커밋에** 들어간다 (CY-976). 이 두 줄이 없으면
+        // "발급은 됐는데 알림이 없다" 는 #326 의 형상이 여기서 안 잡힌다.
+        assertThat(countRows("notifications")).isEqualTo(1);
+        assertThat(countRows("notification_outbox")).isEqualTo(1);
         assertThat(activeCount()).isEqualTo(1);
         // occupyOne 은 updated_at 을 GREATEST(updated_at, :updatedAt, CURRENT_TIMESTAMP(6)) 로 쓴다.
         // 정확일치를 요구하면 CY-769 가 닫은 백데이트 구멍을 도로 여는 방향이다 — 요청 시각으로
@@ -403,6 +427,15 @@ class CouponIssueRepositoryTest {
         assertThat(countRows("issuances")).isEqualTo(1);
         assertThat(countRows("issuance_histories")).isEqualTo(1);
         assertThat(countRows("idempotency_records")).isEqualTo(1);
+        // **매진으로 롤백된 발급은 알리지 않는다.** v2 는 재고 점유보다 앞에서
+        // 알림을 만드는데(CY-976), 그 순서가 이 보장을 깨지 않는다는 것을 여기서
+        // 실제 트랜잭션으로 태운다 — 첫 건의 한 쌍만 남고 둘째 건은 안 남는다.
+        //
+        // 단위 시험은 이것을 못 한다. 거기 TransactionOperations 는 콜백만 실행하는
+        // 모의라 롤백 의미가 없다. 저장소 어댑터에 REQUIRES_NEW 가 붙는 순간
+        // 조용히 깨질 자리라 진짜 경계가 필요하다.
+        assertThat(countRows("notifications")).isEqualTo(1);
+        assertThat(countRows("notification_outbox")).isEqualTo(1);
         assertThat(activeCount()).isEqualTo(1);
         verify(gate).compensate(any(Long.class), any(Long.class), any());
     }
@@ -537,6 +570,14 @@ class CouponIssueRepositoryTest {
                         throw new UnsupportedOperationException();
                     }
                 },
+                // 내용 생성만 대역이다(평문 조립이라 여기서 볼 것이 없다). 저장은 진짜라
+                // 커밋·롤백이 실제 트랜잭션 경계를 탄다.
+                new NotificationRequestService(
+                        notificationRepository,
+                        notificationOutboxRepository,
+                        issuance -> new NotificationPayload(
+                                "member:" + issuance.memberId(),
+                                "coupon-issued:" + issuance.id())),
                 new RequestTokenGenerator("storage-test-api"),
                 transactionTemplate
         );
@@ -815,6 +856,11 @@ class CouponIssueRepositoryTest {
     }
 
     private void resetData() {
+        // 발급 트랜잭션에 테이블이 늘면 **여기도 같이 늘어야 한다.** 안 그러면 앞
+        // 시험의 행이 남아 뒤 시험의 개수 단언이 실행 순서에 따라 달라진다 —
+        // 실제로 알림을 붙이자마자 1 을 기대한 자리에서 2·3 이 나왔다.
+        jdbcTemplate.update("DELETE FROM notification_outbox");
+        jdbcTemplate.update("DELETE FROM notifications");
         jdbcTemplate.update("DELETE FROM idempotency_records");
         jdbcTemplate.update("DELETE FROM issuance_histories");
         jdbcTemplate.update("DELETE FROM issuances");
@@ -932,6 +978,9 @@ class CouponIssueRepositoryTest {
                     "SELECT COUNT(*) FROM issuance_histories";
             case "idempotency_records" ->
                     "SELECT COUNT(*) FROM idempotency_records";
+            case "notifications" -> "SELECT COUNT(*) FROM notifications";
+            case "notification_outbox" ->
+                    "SELECT COUNT(*) FROM notification_outbox";
             default -> throw new IllegalArgumentException(
                     "허용되지 않은 테스트 테이블입니다."
             );
@@ -948,6 +997,29 @@ class CouponIssueRepositoryTest {
         @Bean
         DateTimeProvider couponIssueTestDateTimeProvider() {
             return () -> Optional.of(AUDIT_CREATED_AT);
+        }
+
+        /**
+         * outbox 어댑터가 미터와 백오프를 받는다(CY-908). {@code @DataJpaTest} 는 관측
+         * 자동설정이 빠진 얇은 컨텍스트라 이것이 없으면 어댑터가 아예 안 뜬다 —
+         * 형제 {@code OutboxMeterTestConfig} 와 같은 사유다.
+         *
+         * <p>이 시험이 보는 것은 <b>저장이 트랜잭션을 타느냐</b>라서 백오프 값은
+         * 결과에 안 닿는다. 릴레이를 안 돌리기 때문이다.
+         */
+        @Bean
+        MeterRegistry couponIssueTestMeterRegistry() {
+            return new SimpleMeterRegistry();
+        }
+
+        @Bean
+        NotificationOutboxMeter couponIssueTestOutboxMeter(MeterRegistry registry) {
+            return new NotificationOutboxMeter(registry);
+        }
+
+        @Bean
+        FullJitterBackOff couponIssueTestBackOff() {
+            return new FullJitterBackOff(Duration.ofSeconds(1), Duration.ofSeconds(30));
         }
     }
 
